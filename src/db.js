@@ -2,14 +2,12 @@ const fs = require('fs');
 const path = require('path');
 
 const DB_FILE = path.join(__dirname, '..', 'data.json');
+const MAX_ACTIVE_ORDERS = 3;
+const BIRTHDATE_COOLDOWN_MONTHS = 6;
 
-// Раздел (section) -> Спортпит / БАДы (верхний уровень каталога)
-// Подраздел (category) -> функциональная группа внутри раздела
-// Производитель (brand) -> бренд, по нему можно сортировать/фильтровать
 function seedProducts() {
   const now = new Date().toISOString();
   const items = [
-    // ---------- БАДы ----------
     { name: 'Жиросжигатель', brand: 'Доктор Море', section: 'БАДы', category: 'Жиросжигатели', price: 700, stock: 58, description: 'Стимулирует метаболизм и расход энергии, обычно принимают при похудении вместе со спортом.' },
     { name: 'Коллаген комплекс', brand: 'Доктор Море', section: 'БАДы', category: 'Коллаген', price: 850, stock: 6, description: 'Поддержка кожи, суставов и связок, особенно актуально после 30 лет.' },
     { name: 'Селен+цинк', brand: 'Доктор Море', section: 'БАДы', category: 'Витамины и минералы', price: 550, stock: 4, description: 'Антиоксидантная пара, поддержка щитовидной железы и иммунитета.' },
@@ -26,8 +24,6 @@ function seedProducts() {
     { name: 'D-mannose', brand: 'Now', section: 'БАДы', category: 'Женское здоровье', price: 980, stock: 1, description: 'Поддержка здоровья мочевыводящих путей, популярно у женщин при склонности к циститу.' },
     { name: 'Железо', brand: 'Доктор Дезалия', section: 'БАДы', category: 'Витамины и минералы', price: 400, stock: 2, description: 'Восполнение дефицита железа (аналог хелата железа других брендов).' },
     { name: 'Liquid collagen', brand: 'Доктор Зубарева', section: 'БАДы', category: 'Коллаген', price: 100, stock: 1, description: 'Жидкий коллаген, для кожи и суставов, быстрее усваивается чем капсулы.' },
-
-    // ---------- Спортпит ----------
     { name: 'Гуарана', brand: 'Ironman', section: 'Спортпит', category: 'Энергетики', price: 50, stock: 10, description: 'Природный источник кофеина, бодрость и концентрация без "срыва" как от кофе.' },
     { name: 'Magnesium glycinate liquid', brand: 'Maxler', section: 'Спортпит', category: 'Витамины и минералы', price: 100, stock: 12, description: 'Жидкий магний, быстрое усвоение, для сна и восстановления мышц после тренировки.' },
     { name: 'Monster pak (40 пакетов)', brand: 'Maxler', section: 'Спортпит', category: 'Витаминные комплексы', price: 2900, stock: 1, description: 'Комплексный набор витаминов и добавок на 40 приёмов — удобно вместо сборки курса из отдельных банок.' },
@@ -39,29 +35,17 @@ function seedProducts() {
     { name: 'Pre-work', brand: 'Cybermass', section: 'Спортпит', category: 'Предтренировочные комплексы', price: 500, stock: 1, description: 'Предтренировочный комплекс, аналог Fighter и Black Mamba.' },
     { name: 'Caffeine 2000 plus', brand: 'Sporttech', section: 'Спортпит', category: 'Энергетики', price: 50, stock: 1, description: 'Чистый кофеин в капсулах — бодрость перед тренировкой или в течение дня.' },
   ];
-
   return items.map((item, i) => ({
-    id: i + 1,
-    name: item.name,
-    description: item.description,
-    price: item.price,
-    section: item.section,
-    category: item.category,
-    brand: item.brand,
-    image_url: '',
-    stock: item.stock,
-    active: true,
-    created_at: now
+    id: i + 1, name: item.name, description: item.description, price: item.price,
+    section: item.section, category: item.category, brand: item.brand,
+    image_url: '', stock: item.stock, active: true, created_at: now
   }));
 }
 
 function loadDefault() {
   const products = seedProducts();
   return {
-    users: [],
-    products,
-    orders: [],
-    order_items: [],
+    users: [], products, orders: [], order_items: [],
     seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1 }
   };
 }
@@ -74,28 +58,20 @@ if (fs.existsSync(DB_FILE)) {
   persist();
 }
 
-function persist() {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-}
-
-function nextId(table) {
-  return data.seq[table]++;
-}
+function persist() { fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2)); }
+function nextId(table) { return data.seq[table]++; }
 
 // ---------- Users ----------
 function upsertUser({ telegram_id, username, first_name, last_name }) {
   let user = data.users.find(u => u.telegram_id === telegram_id);
   if (user) {
-    // Имя/фамилию, введённые пользователем вручную в профиле, не затираем данными из Telegram,
-    // если они уже заполнены — только username подтягиваем всегда (он может меняться в Telegram).
     user.username = username;
     if (!user.first_name) user.first_name = first_name;
     if (!user.last_name) user.last_name = last_name;
   } else {
     user = {
-      id: nextId('users'),
-      telegram_id, username, first_name, last_name,
-      phone: '', address: '',
+      id: nextId('users'), telegram_id, username, first_name, last_name,
+      phone: '', address: '', birth_date: null, birth_date_updated_at: null,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -112,29 +88,31 @@ function updateUser(id, fields) {
   return user;
 }
 
+// Проверяет, можно ли сейчас менять дату рождения (раз в 6 месяцев).
+// Возвращает { allowed: true } либо { allowed: false, nextAllowedAt }
+function checkBirthDateCooldown(user, newBirthDate) {
+  if (!newBirthDate || newBirthDate === user.birth_date) return { allowed: true };
+  if (!user.birth_date_updated_at) return { allowed: true };
+  const last = new Date(user.birth_date_updated_at);
+  const nextAllowed = new Date(last);
+  nextAllowed.setMonth(nextAllowed.getMonth() + BIRTHDATE_COOLDOWN_MONTHS);
+  if (new Date() < nextAllowed) return { allowed: false, nextAllowedAt: nextAllowed.toISOString() };
+  return { allowed: true };
+}
+
 // ---------- Products ----------
 function getProducts({ onlyActive } = {}) {
   const list = onlyActive ? data.products.filter(p => p.active) : data.products;
   return [...list].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
-
-function getProduct(id) {
-  return data.products.find(p => p.id === Number(id));
-}
+function getProduct(id) { return data.products.find(p => p.id === Number(id)); }
 
 function createProduct(fields) {
   const product = {
-    id: nextId('products'),
-    name: fields.name,
-    description: fields.description || '',
-    price: Number(fields.price),
-    section: fields.section || '',
-    category: fields.category || '',
-    brand: fields.brand || '',
-    image_url: fields.image_url || '',
-    stock: Number(fields.stock) || 0,
-    active: true,
-    created_at: new Date().toISOString()
+    id: nextId('products'), name: fields.name, description: fields.description || '',
+    price: Number(fields.price), section: fields.section || '', category: fields.category || '',
+    brand: fields.brand || '', image_url: fields.image_url || '', stock: Number(fields.stock) || 0,
+    active: true, created_at: new Date().toISOString()
   };
   data.products.push(product);
   persist();
@@ -173,40 +151,52 @@ function deleteProductHard(id) {
 }
 
 // ---------- Orders ----------
-function createOrder({ user_id, items, comment, phone, address }) {
+function resolveItems(items) {
+  // Возвращает { resolvedItems, total } либо { error, product } если запрошено больше, чем в наличии
   let total = 0;
   const resolvedItems = [];
   for (const item of items) {
     const product = getProduct(item.product_id);
     if (!product || !product.active) continue;
     const qty = Math.max(1, Number(item.qty) || 1);
+    if (qty > product.stock) {
+      return { error: 'insufficient_stock', product: product.name, available: product.stock };
+    }
     resolvedItems.push({ product_id: product.id, name: product.name, price: product.price, qty });
     total += product.price * qty;
   }
-  if (resolvedItems.length === 0) return null;
+  return { resolvedItems, total };
+}
+
+function countActiveOrders(user_id) {
+  return data.orders.filter(o => o.user_id === user_id && ['new', 'confirmed'].includes(o.status)).length;
+}
+
+function createOrder({ user_id, items, comment, phone, address }) {
+  if (countActiveOrders(user_id) >= MAX_ACTIVE_ORDERS) {
+    return { error: 'too_many_active_orders', limit: MAX_ACTIVE_ORDERS };
+  }
+  const resolved = resolveItems(items);
+  if (resolved.error) return resolved;
+  if (resolved.resolvedItems.length === 0) return { error: 'no_valid_items' };
 
   const order = {
-    id: nextId('orders'),
-    user_id,
-    status: 'new',
-    total,
-    comment: comment || '',
-    phone: phone || '',
-    address: address || '',
+    id: nextId('orders'), user_id, status: 'new', total: resolved.total,
+    comment: comment || '', phone: phone || '', address: address || '',
     created_at: new Date().toISOString()
   };
   data.orders.push(order);
-
-  const items_ = resolvedItems.map(i => ({ id: nextId('order_items'), order_id: order.id, ...i }));
+  const items_ = resolved.resolvedItems.map(i => ({ id: nextId('order_items'), order_id: order.id, ...i }));
   data.order_items.push(...items_);
   persist();
-
-  return { ...order, items: items_ };
+  return { order: { ...order, items: items_ } };
 }
 
 function attachItems(order) {
   return { ...order, items: data.order_items.filter(i => i.order_id === order.id) };
 }
+
+function getOrderRaw(id) { return data.orders.find(o => o.id === Number(id)); }
 
 function getOrdersByUser(user_id) {
   return data.orders.filter(o => o.user_id === user_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(attachItems);
@@ -222,11 +212,47 @@ function getAllOrders() {
 }
 
 function updateOrderStatus(id, status) {
-  const order = data.orders.find(o => o.id === Number(id));
+  const order = getOrderRaw(id);
   if (!order) return null;
   order.status = status;
   persist();
   return order;
+}
+
+// Редактирование заказа пользователем — только пока статус "new"
+function updateOrder(id, { items, address, comment }) {
+  const order = getOrderRaw(id);
+  if (!order) return { error: 'not_found' };
+  if (order.status !== 'new') return { error: 'not_editable' };
+
+  const resolved = resolveItems(items);
+  if (resolved.error) return resolved;
+  if (resolved.resolvedItems.length === 0) return { error: 'no_valid_items' };
+
+  data.order_items = data.order_items.filter(i => i.order_id !== order.id);
+  const items_ = resolved.resolvedItems.map(i => ({ id: nextId('order_items'), order_id: order.id, ...i }));
+  data.order_items.push(...items_);
+
+  order.total = resolved.total;
+  if (address !== undefined) order.address = address;
+  if (comment !== undefined) order.comment = comment;
+  persist();
+  return { order: attachItems(order) };
+}
+
+// Отмена/удаление заказа пользователем — только пока статус "new"
+function cancelOrder(id, { hard = true } = {}) {
+  const order = getOrderRaw(id);
+  if (!order) return { error: 'not_found' };
+  if (order.status !== 'new') return { error: 'not_cancellable' };
+  if (hard) {
+    data.orders = data.orders.filter(o => o.id !== order.id);
+    data.order_items = data.order_items.filter(i => i.order_id !== order.id);
+  } else {
+    order.status = 'cancelled';
+  }
+  persist();
+  return { ok: true };
 }
 
 // ---------- Статистика для личного кабинета ----------
@@ -239,7 +265,8 @@ function getUserStats(user_id) {
 }
 
 module.exports = {
-  upsertUser, updateUser,
+  upsertUser, updateUser, checkBirthDateCooldown,
   getProducts, getProduct, createProduct, updateProduct, hideProduct, deleteProductHard,
-  createOrder, getOrdersByUser, getAllOrders, updateOrderStatus, getUserStats
+  createOrder, getOrdersByUser, getAllOrders, updateOrderStatus, getUserStats,
+  getOrderRaw, updateOrder, cancelOrder, countActiveOrders, MAX_ACTIVE_ORDERS
 };
