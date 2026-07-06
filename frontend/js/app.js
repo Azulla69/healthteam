@@ -12,6 +12,8 @@ const state = {
   catalogStep: 'sections',
   selectedSection: null,
   selectedSubcategory: null,
+  selectedBrand: null,
+  searchQuery: '',
   sortBy: 'default',
 
   // Управление
@@ -184,38 +186,47 @@ function renderCatalog() {
     `;
   }
 
-  if (state.catalogStep === 'subcategories') {
-    const inSection = products.filter(p => p.section === state.selectedSection);
-    const cats = [...new Set(inSection.map(p => p.category).filter(Boolean))];
-    return `
-      <div class="topbar"><div><div class="eyebrow">Раздел</div><h1>${state.selectedSection}</h1></div></div>
-      <div class="back-row" data-action="back-to-sections">← Все разделы</div>
-      <div class="subcat-list">
-        <div class="subcat-item" data-cat="__all__">Все товары раздела <span class="count">${inSection.length}</span></div>
-        ${cats.map(c => `<div class="subcat-item" data-cat="${c}">${c} <span class="count">${inSection.filter(p => p.category === c).length}</span></div>`).join('')}
-      </div>
-    `;
-  }
-
+  // Сразу список всех товаров раздела + поиск по названию + фильтр по подразделу/производителю
   let list = products.filter(p => p.section === state.selectedSection);
+  const categories = [...new Set(list.map(p => p.category).filter(Boolean))];
+  const brands = [...new Set(list.map(p => p.brand).filter(Boolean))].sort();
+
   if (state.selectedSubcategory) list = list.filter(p => p.category === state.selectedSubcategory);
+  if (state.selectedBrand) list = list.filter(p => p.brand === state.selectedBrand);
+  if (state.searchQuery.trim()) {
+    const q = state.searchQuery.trim().toLowerCase();
+    list = list.filter(p => p.name.toLowerCase().includes(q));
+  }
   if (state.sortBy === 'brand') list = [...list].sort((a, b) => (a.brand || '').localeCompare(b.brand || ''));
   else if (state.sortBy === 'price_asc') list = [...list].sort((a, b) => a.price - b.price);
   else if (state.sortBy === 'price_desc') list = [...list].sort((a, b) => b.price - a.price);
 
   return `
-    <div class="topbar"><div><div class="eyebrow">${state.selectedSection}</div><h1>${state.selectedSubcategory || 'Все товары'}</h1></div></div>
-    <div class="back-row" data-action="back-to-subcats">← ${state.selectedSection}</div>
-    <div class="sort-row">
-      <select data-action="sort-select">
-        <option value="default" ${state.sortBy === 'default' ? 'selected' : ''}>По умолчанию</option>
-        <option value="brand" ${state.sortBy === 'brand' ? 'selected' : ''}>По производителю (А-Я)</option>
-        <option value="price_asc" ${state.sortBy === 'price_asc' ? 'selected' : ''}>Сначала дешевле</option>
-        <option value="price_desc" ${state.sortBy === 'price_desc' ? 'selected' : ''}>Сначала дороже</option>
-      </select>
+    <div class="topbar"><div><div class="eyebrow">${state.selectedSection}</div><h1>Каталог</h1></div></div>
+    <div class="back-row" data-action="back-to-sections">← Все разделы</div>
+    <div class="section" style="padding-top:0">
+      <div class="field" style="margin-bottom:8px">
+        <input id="catalog-search" placeholder="Поиск по названию..." value="${state.searchQuery}" />
+      </div>
+      <div class="chips" style="padding:0 0 10px">
+        <div class="chip ${!state.selectedSubcategory ? 'active' : ''}" data-cat="__all__">Все</div>
+        ${categories.map(c => `<div class="chip ${state.selectedSubcategory === c ? 'active' : ''}" data-cat="${c}">${c}</div>`).join('')}
+      </div>
+      <div class="sort-row" style="justify-content:space-between">
+        <select data-action="brand-select">
+          <option value="">Все производители</option>
+          ${brands.map(b => `<option value="${b}" ${state.selectedBrand === b ? 'selected' : ''}>${b}</option>`).join('')}
+        </select>
+        <select data-action="sort-select">
+          <option value="default" ${state.sortBy === 'default' ? 'selected' : ''}>По умолчанию</option>
+          <option value="brand" ${state.sortBy === 'brand' ? 'selected' : ''}>По производителю (А-Я)</option>
+          <option value="price_asc" ${state.sortBy === 'price_asc' ? 'selected' : ''}>Сначала дешевле</option>
+          <option value="price_desc" ${state.sortBy === 'price_desc' ? 'selected' : ''}>Сначала дороже</option>
+        </select>
+      </div>
     </div>
     <div class="grid">
-      ${list.map(renderProductCard).join('') || `<div class="empty-state" style="grid-column:1/-1"><h3>Пока пусто</h3></div>`}
+      ${list.map(renderProductCard).join('') || `<div class="empty-state" style="grid-column:1/-1"><h3>Ничего не найдено</h3></div>`}
     </div>
   `;
 }
@@ -1224,7 +1235,7 @@ function attachEvents() {
   app.querySelectorAll('[data-tab]').forEach(btn => {
     btn.onclick = async () => {
       state.view = btn.dataset.tab;
-      if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; }
+      if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
       if (state.view === 'orders' && state.user) await loadOrders();
       if (state.view === 'manage') { state.manageSection = null; }
       if (state.view === 'cart' && state.user) await refreshMyActiveOrders();
@@ -1234,17 +1245,29 @@ function attachEvents() {
 
   // Каталог
   app.querySelectorAll('[data-section]').forEach(tile => {
-    tile.onclick = () => { state.selectedSection = tile.dataset.section; state.catalogStep = 'subcategories'; render(); };
+    tile.onclick = () => {
+      state.selectedSection = tile.dataset.section;
+      state.catalogStep = 'products';
+      state.selectedSubcategory = null;
+      state.selectedBrand = null;
+      state.searchQuery = '';
+      state.sortBy = 'default';
+      render();
+    };
   });
   app.querySelectorAll('[data-cat]').forEach(item => {
-    item.onclick = () => { state.selectedSubcategory = item.dataset.cat === '__all__' ? null : item.dataset.cat; state.catalogStep = 'products'; state.sortBy = 'default'; render(); };
+    item.onclick = () => { state.selectedSubcategory = item.dataset.cat === '__all__' ? null : item.dataset.cat; render(); };
   });
   const backToSections = app.querySelector('[data-action="back-to-sections"]');
   if (backToSections) backToSections.onclick = () => { state.catalogStep = 'sections'; state.selectedSection = null; render(); };
-  const backToSubcats = app.querySelector('[data-action="back-to-subcats"]');
-  if (backToSubcats) backToSubcats.onclick = () => { state.catalogStep = 'subcategories'; state.selectedSubcategory = null; render(); };
   const sortSelect = app.querySelector('[data-action="sort-select"]');
   if (sortSelect) sortSelect.onchange = () => { state.sortBy = sortSelect.value; render(); };
+  const brandSelect = app.querySelector('[data-action="brand-select"]');
+  if (brandSelect) brandSelect.onchange = () => { state.selectedBrand = brandSelect.value || null; render(); };
+  const searchInput = app.querySelector('#catalog-search');
+  if (searchInput) {
+    searchInput.oninput = () => { state.searchQuery = searchInput.value; render(); searchInput.focus(); searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length); };
+  }
 
   app.querySelectorAll('[data-open-product]').forEach(card => {
     card.onclick = () => { const product = state.products.find(p => p.id === Number(card.dataset.openProduct)); if (product) openProductDetailModal(product); };
