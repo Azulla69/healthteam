@@ -21,7 +21,12 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 15% 0%, rgba(31, 75, 63, 0.10), transparent 45%),
+    radial-gradient(circle at 90% 15%, rgba(198, 138, 62, 0.09), transparent 40%),
+    radial-gradient(circle at 50% 100%, rgba(143, 174, 155, 0.15), transparent 50%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: 'Inter', -apple-system, sans-serif;
   -webkit-tap-highlight-color: transparent;
@@ -39,8 +44,9 @@ h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 600; margin: 0; }
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 10;
-  background: var(--bg);
+  z-index: 11;
+  background: linear-gradient(180deg, var(--bg) 85%, transparent);
+  backdrop-filter: blur(6px);
   padding: 18px 16px 10px;
   display: flex;
   align-items: baseline;
@@ -309,10 +315,14 @@ h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 600; margin: 0; }
 .section-tile .count { font-size: 12px; opacity: 0.8; }
 
 .back-row {
+  position: sticky;
+  top: 58px;
+  z-index: 10;
+  background: var(--bg);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px 8px;
+  padding: 6px 16px 8px;
   color: var(--forest-dark);
   font-size: 14px;
   cursor: pointer;
@@ -655,4 +665,34 @@ img.thumb { width: 44px; }
 
 .top-products-list { padding: 0 16px; }
 .top-product-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+
+/* ---- Бонусная программа ---- */
+.bonus-card {
+  background: linear-gradient(160deg, var(--amber), var(--amber-dark));
+  color: #fff;
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 14px;
+}
+.bonus-card .row-between { color: #fff; }
+.bonus-tier-name { font-family: 'Fraunces', serif; font-size: 19px; font-weight: 600; }
+.bonus-balance { font-family: 'JetBrains Mono', monospace; font-size: 15px; }
+.bonus-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.3);
+  margin: 12px 0 6px;
+  overflow: hidden;
+}
+.bonus-progress-fill {
+  height: 100%;
+  background: #fff;
+  border-radius: 999px;
+}
+.bonus-progress-label { font-size: 11px; opacity: 0.9; }
+.tier-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: rgba(255,255,255,0.25);
+}
 

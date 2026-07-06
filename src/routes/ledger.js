@@ -16,4 +16,9 @@ router.post('/', requireAdmin, (req, res) => {
   res.status(201).json({ entry, balance: db.getBalance() });
 });
 
+router.delete('/:id', requireAdmin, (req, res) => {
+  db.deleteLedgerEntry(req.params.id);
+  res.json({ deleted: true, balance: db.getBalance() });
+});
+
 module.exports = router;

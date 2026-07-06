@@ -9,6 +9,13 @@ const DB_FILE = path.join(DATA_DIR, 'data.json');
 const MAX_ACTIVE_ORDERS = 3;
 const BIRTHDATE_COOLDOWN_MONTHS = 6;
 const ACTIVE_STATUSES = ['processing', 'delivering'];
+const BONUS_PERIOD_MONTHS = 6;
+const BONUS_TIERS = [
+  { name: 'Платиновый', min: 10000, rate: 0.10 },
+  { name: 'Золотой', min: 6000, rate: 0.07 },
+  { name: 'Серебряный', min: 3000, rate: 0.05 },
+  { name: 'Бронзовый', min: 0, rate: 0.03 },
+];
 
 function seedProducts() {
   const now = new Date().toISOString();
@@ -62,6 +69,10 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.ledger) data.ledger = [];
   if (!data.seq.ledger) data.seq.ledger = 1;
   if (!data.seq.batches) data.seq.batches = 1;
+  data.users.forEach(u => {
+    if (u.bonus_balance === undefined) u.bonus_balance = 0;
+    if (u.first_purchase_at === undefined) u.first_purchase_at = null;
+  });
 } else {
   data = loadDefault();
   persist();
@@ -81,6 +92,7 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
     user = {
       id: nextId('users'), telegram_id, username, first_name, last_name,
       phone: '', address: '', birth_date: null, birth_date_updated_at: null,
+      bonus_balance: 0, first_purchase_at: null,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -213,6 +225,20 @@ function removeStock(productId, qty) {
 }
 
 // ---------- Orders ----------
+function itemsOfOrder(orderId) { return data.order_items.filter(i => i.order_id === orderId); }
+
+// Списывает со склада все товары заказа (вызывается при переходе в "Доставляем")
+function deductStockForOrder(order) {
+  itemsOfOrder(order.id).forEach(i => removeStock(i.product_id, i.qty));
+}
+
+// Возвращает на склад все товары заказа (вызывается при отмене уже списанного заказа)
+function restoreStockForOrder(order) {
+  itemsOfOrder(order.id).forEach(i => {
+    if (getProduct(i.product_id)) addStock(i.product_id, i.qty, null);
+  });
+}
+
 function resolveItems(items) {
   let total = 0;
   const resolvedItems = [];
@@ -252,6 +278,31 @@ function createOrder({ user_id, items, comment, phone, address }) {
 function attachItems(order) { return { ...order, items: data.order_items.filter(i => i.order_id === order.id) }; }
 function getOrderRaw(id) { return data.orders.find(o => o.id === Number(id)); }
 
+// Ручное оформление продажи админом (товар продан не через бота) — сразу "Выполнено",
+// списывает склад и добавляет сумму в бухгалтерию + начисляет кэшбек, как обычный заказ
+function createManualOrder({ user_id, items, description }) {
+  const resolved = resolveItems(items);
+  if (resolved.error) return resolved;
+  if (resolved.resolvedItems.length === 0) return { error: 'no_valid_items' };
+
+  const now = new Date().toISOString();
+  const order = {
+    id: nextId('orders'), user_id, status: 'completed', paid: true,
+    total: resolved.total, comment: description || 'Продажа оформлена вручную', admin_comment: '',
+    phone: '', address: 'Продажа оформлена вручную (без доставки)',
+    created_at: now, completed_at: now
+  };
+  data.orders.push(order);
+  const items_ = resolved.resolvedItems.map(i => ({ id: nextId('order_items'), order_id: order.id, ...i }));
+  data.order_items.push(...items_);
+
+  resolved.resolvedItems.forEach(i => removeStock(i.product_id, i.qty));
+  awardCashback(order);
+  addLedgerEntry({ type: 'income', amount: order.total, description: `Заказ №${order.id} (вручную)`, date: now, auto: true, order_id: order.id });
+  persist();
+  return { order: attachItems(order) };
+}
+
 function getOrdersByUser(user_id) {
   return data.orders.filter(o => o.user_id === user_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(attachItems);
 }
@@ -284,17 +335,38 @@ function updateOrder(id, { items, address, comment }) {
   return { order: attachItems(order) };
 }
 
-function cancelOrder(id) {
+// isAdmin=false: пользователь отменяет свой заказ, только пока статус "processing"
+// isAdmin=true: админ может отменить/удалить заказ на любом этапе — товар возвращается на склад,
+// а если заказ уже был выполнен — сторнируется автозапись в бухгалтерии и списанный кэшбек
+function adminOrUserCancel(id, { isAdmin } = {}) {
   const order = getOrderRaw(id);
   if (!order) return { error: 'not_found' };
-  if (order.status !== 'processing') return { error: 'not_cancellable' };
+
+  if (!isAdmin) {
+    if (order.status !== 'processing') return { error: 'not_cancellable' };
+    data.orders = data.orders.filter(o => o.id !== order.id);
+    data.order_items = data.order_items.filter(i => i.order_id !== order.id);
+    persist();
+    return { ok: true };
+  }
+
+  if (order.status === 'delivering' || order.status === 'completed') {
+    restoreStockForOrder(order);
+  }
+  if (order.status === 'completed') {
+    data.ledger = data.ledger.filter(e => !(e.order_id === order.id && e.auto));
+    if (order.cashback_awarded) {
+      const user = getUser(order.user_id);
+      if (user) user.bonus_balance = Math.max(0, (user.bonus_balance || 0) - order.cashback_awarded);
+    }
+  }
   data.orders = data.orders.filter(o => o.id !== order.id);
   data.order_items = data.order_items.filter(i => i.order_id !== order.id);
   persist();
   return { ok: true };
 }
 
-// "В обработке" -> "Доставляем": обязателен комментарий админа (время/место доставки)
+// "В обработке" -> "Доставляем": обязателен комментарий админа (время/место доставки), товар списывается со склада
 function moveToDelivering(id, adminComment) {
   const order = getOrderRaw(id);
   if (!order) return { error: 'not_found' };
@@ -302,17 +374,19 @@ function moveToDelivering(id, adminComment) {
   if (!adminComment || !adminComment.trim()) return { error: 'admin_comment_required' };
   order.status = 'delivering';
   order.admin_comment = adminComment.trim();
+  deductStockForOrder(order);
   persist();
   return { order: attachItems(order) };
 }
 
-// "Доставляем" -> "Выполнено": сумма заказа автоматически уходит в бухгалтерию
+// "Доставляем" -> "Выполнено": сумма заказа автоматически уходит в бухгалтерию, начисляется кэшбек
 function moveToCompleted(id) {
   const order = getOrderRaw(id);
   if (!order) return { error: 'not_found' };
   if (order.status !== 'delivering') return { error: 'bad_transition' };
   order.status = 'completed';
   order.completed_at = new Date().toISOString();
+  awardCashback(order);
   addLedgerEntry({ type: 'income', amount: order.total, description: `Заказ №${order.id}`, date: order.completed_at, auto: true, order_id: order.id });
   persist();
   return { order: attachItems(order) };
@@ -326,7 +400,74 @@ function setOrderPaid(id, paid) {
   return { order: attachItems(order) };
 }
 
-// ---------- Статистика личного кабинета ----------
+// ---------- Бонусная программа ----------
+function getBonusTier(periodSpent) {
+  return BONUS_TIERS.find(t => periodSpent >= t.min);
+}
+
+// Границы текущего 6-месячного периода, отсчитываемого от даты первой покупки
+function getBonusPeriodBounds(firstPurchaseAt, now = new Date()) {
+  let start = new Date(firstPurchaseAt);
+  let end = new Date(start);
+  end.setMonth(end.getMonth() + BONUS_PERIOD_MONTHS);
+  while (end <= now) {
+    start = new Date(end);
+    end = new Date(start);
+    end.setMonth(end.getMonth() + BONUS_PERIOD_MONTHS);
+  }
+  return { periodStart: start, periodEnd: end };
+}
+
+function getPeriodSpent(user_id, periodStart, periodEnd) {
+  return data.orders
+    .filter(o => o.user_id === user_id && o.status === 'completed' && o.completed_at)
+    .filter(o => {
+      const d = new Date(o.completed_at);
+      return d >= periodStart && d < periodEnd;
+    })
+    .reduce((sum, o) => sum + o.total, 0);
+}
+
+function getBonusInfo(user) {
+  const tiersAsc = [...BONUS_TIERS].sort((a, b) => a.min - b.min);
+  if (!user.first_purchase_at) {
+    const tier = getBonusTier(0);
+    const next = tiersAsc.find(t => t.min > 0);
+    return {
+      balance: user.bonus_balance || 0, tier: tier.name, rate: tier.rate,
+      periodSpent: 0, periodStart: null, periodEnd: null,
+      nextTierThreshold: next ? next.min : null, isMaxTier: !next
+    };
+  }
+  const { periodStart, periodEnd } = getBonusPeriodBounds(user.first_purchase_at);
+  const periodSpent = getPeriodSpent(user.id, periodStart, periodEnd);
+  const tier = getBonusTier(periodSpent);
+  const next = tiersAsc.find(t => t.min > tier.min);
+  return {
+    balance: user.bonus_balance || 0, tier: tier.name, rate: tier.rate,
+    periodSpent, periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString(),
+    nextTierThreshold: next ? next.min : null, isMaxTier: !next
+  };
+}
+
+// Начисляет кэшбек за выполненный заказ (вызывается при переводе в "Выполнено" и при ручной продаже)
+function awardCashback(order) {
+  const user = getUser(order.user_id);
+  if (!user) return 0;
+  if (!user.first_purchase_at) user.first_purchase_at = order.completed_at;
+
+  const { periodStart, periodEnd } = getBonusPeriodBounds(user.first_purchase_at);
+  const periodSpent = getPeriodSpent(user.id, periodStart, periodEnd);
+  const tier = getBonusTier(periodSpent);
+  const cashback = Math.round(order.total * tier.rate);
+
+  user.bonus_balance = (user.bonus_balance || 0) + cashback;
+  order.cashback_awarded = cashback;
+  order.cashback_tier = tier.name;
+  return cashback;
+}
+
+
 function getUserStats(user_id) {
   const orders = data.orders.filter(o => o.user_id === user_id && o.status !== 'cancelled');
   return { ordersCount: orders.length, totalSpent: orders.reduce((sum, o) => sum + o.total, 0) };
@@ -344,7 +485,14 @@ function addLedgerEntry({ type, amount, description, date, auto = false, order_i
 }
 
 function getLedger() {
-  return [...data.ledger].sort((a, b) => new Date(b.date) - new Date(a.date));
+  return [...data.ledger].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
+function deleteLedgerEntry(id) {
+  const before = data.ledger.length;
+  data.ledger = data.ledger.filter(e => e.id !== Number(id));
+  persist();
+  return { deleted: data.ledger.length < before };
 }
 
 function getBalance() {
@@ -385,8 +533,9 @@ module.exports = {
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown,
   getProducts, getProduct, createProduct, updateProduct, hideProduct, deleteProductHard,
   addStock, removeStock, sanitizeProduct, nearestExpiry,
-  createOrder, getOrdersByUser, getAllOrders, getUserStats,
-  getOrderRaw, updateOrder, cancelOrder, moveToDelivering, moveToCompleted, setOrderPaid,
+  createOrder, createManualOrder, getOrdersByUser, getAllOrders, getUserStats,
+  getOrderRaw, updateOrder, adminOrUserCancel, moveToDelivering, moveToCompleted, setOrderPaid,
   countActiveOrders, MAX_ACTIVE_ORDERS,
-  addLedgerEntry, getLedger, getBalance, getShopStats
+  addLedgerEntry, getLedger, deleteLedgerEntry, getBalance, getShopStats,
+  getBonusInfo
 };

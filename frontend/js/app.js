@@ -36,7 +36,20 @@ function toast(msg) {
   setTimeout(() => el.remove(), 2200);
 }
 function profileComplete(user) { return !!(user && user.first_name && user.last_name && user.phone); }
+function onboardingComplete(user) { return !!(user && user.first_name && user.last_name && user.phone && user.birth_date); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('ru-RU') : '—'; }
+
+// Держит поле телефона всегда начинающимся с "+7"
+function attachPhoneMask(input) {
+  if (!input.value) input.value = '+7 ';
+  input.addEventListener('focus', () => { if (!input.value) input.value = '+7 '; });
+  input.addEventListener('input', () => {
+    let digits = input.value.replace(/\D/g, '');
+    if (digits.startsWith('7')) digits = digits.slice(1);
+    if (digits.startsWith('8')) digits = digits.slice(1);
+    input.value = '+7 ' + digits;
+  });
+}
 
 // Показывает реальное фото товара, если оно загружено, иначе — плейсхолдер с эмодзи
 function thumbHtml(imageUrl, className, emoji = '🌿') {
@@ -58,6 +71,41 @@ async function loadInitialData() {
   } catch (e) { /* гость */ }
   await loadProducts();
   render();
+  if (state.user && !onboardingComplete(state.user)) openOnboardingModal();
+}
+
+function openOnboardingModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const u = state.user;
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>Добро пожаловать в HealthTeam 👋</h3>
+      <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px">Заполните, пожалуйста, свои данные — это займёт минуту и понадобится один раз, дальше при заказах указывать их снова не нужно.</p>
+      <div class="field"><label>Имя</label><input id="ob-first-name" value="${u.first_name || ''}" /></div>
+      <div class="field"><label>Фамилия</label><input id="ob-last-name" value="${u.last_name || ''}" /></div>
+      <div class="field"><label>Телефон</label><input id="ob-phone" type="tel" value="${u.phone || ''}" /></div>
+      <div class="field"><label>Дата рождения</label><input id="ob-birth" type="date" value="${u.birth_date || ''}" /></div>
+      <button class="btn btn-primary btn-block" id="ob-save">Продолжить</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  attachPhoneMask(backdrop.querySelector('#ob-phone'));
+  backdrop.querySelector('#ob-save').onclick = async () => {
+    const first_name = document.getElementById('ob-first-name').value.trim();
+    const last_name = document.getElementById('ob-last-name').value.trim();
+    const phone = document.getElementById('ob-phone').value.trim();
+    const birth_date = document.getElementById('ob-birth').value;
+    if (!first_name || !last_name || phone.replace(/\D/g, '').length < 11 || !birth_date) {
+      toast('Заполните все поля корректно'); return;
+    }
+    try {
+      state.user = await api('/api/profile/me', { method: 'PUT', body: { first_name, last_name, phone, birth_date } });
+      backdrop.remove();
+      toast('Спасибо! Профиль заполнен');
+      render();
+    } catch (e) { toast('Не удалось сохранить, попробуйте ещё раз'); }
+  };
 }
 
 async function loadProducts() { state.products = await api('/api/catalog'); }
@@ -473,7 +521,27 @@ function renderProfile() {
         <div class="stat-box"><div class="num">${stats.ordersCount}</div><div class="lbl">Заказов сделано</div></div>
         <div class="stat-box"><div class="num">${stats.totalSpent} ₽</div><div class="lbl">Всего потрачено</div></div>
       </div>
+      ${renderBonusCard(state.user.bonus)}
       ${!profileComplete(state.user) ? `<div class="profile-incomplete">Заполните имя, фамилию и телефон в настройках (⚙️ вверху).</div>` : ''}
+    </div>
+  `;
+}
+
+function renderBonusCard(bonus) {
+  if (!bonus) return '';
+  const tierEmoji = { 'Бронзовый': '🥉', 'Серебряный': '🥈', 'Золотой': '🥇', 'Платиновый': '💎' };
+  const progressPct = bonus.isMaxTier ? 100 : Math.min(100, Math.round((bonus.periodSpent / bonus.nextTierThreshold) * 100));
+  return `
+    <div class="bonus-card">
+      <div class="row-between">
+        <span class="tier-badge">${tierEmoji[bonus.tier] || ''} ${bonus.tier}</span>
+        <span class="bonus-balance">${bonus.balance} ₽ бонусов</span>
+      </div>
+      <div class="bonus-tier-name" style="margin-top:10px">Кэшбек ${Math.round(bonus.rate * 100)}%</div>
+      <div class="bonus-progress-track"><div class="bonus-progress-fill" style="width:${progressPct}%"></div></div>
+      <div class="bonus-progress-label">
+        ${bonus.isMaxTier ? 'Максимальный уровень достигнут' : `${bonus.periodSpent} ₽ из ${bonus.nextTierThreshold} ₽ за текущие полгода — до следующего уровня`}
+      </div>
     </div>
   `;
 }
@@ -499,6 +567,7 @@ function openSettingsModal() {
     </div>
   `;
   document.body.appendChild(backdrop);
+  attachPhoneMask(backdrop.querySelector('#s-phone'));
   backdrop.querySelector('#s-cancel').onclick = () => backdrop.remove();
   backdrop.querySelector('#s-save').onclick = async () => {
     const first_name = document.getElementById('s-first-name').value.trim();
@@ -627,7 +696,7 @@ function renderManageOrders() {
               <strong>Заказ №${o.id}</strong>
               ${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}
             </div>
-            <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'}</div>
+            <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'} · ${o.phone || '—'}</div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
             <div class="row-between"><span class="price-tag">${o.total} ₽</span></div>
           </div>
@@ -655,6 +724,7 @@ function openManageOrderDetailModal(order) {
           <button class="btn btn-primary" id="mo-complete">Доставлен</button>
           <button class="btn ${order.paid ? 'btn-primary' : 'btn-ghost'}" id="mo-paid">${order.paid ? 'Оплачено ✓' : 'Оплачен'}</button>
         </div>
+        <button class="btn btn-danger btn-block" id="mo-cancel" style="margin-top:8px">Отменить заказ</button>
       `;
     } else if (order.status === 'completed') {
       actionsHtml = `
@@ -671,6 +741,7 @@ function openManageOrderDetailModal(order) {
         <h3>Заказ №${order.id}</h3>
         <span class="status-badge status-${order.status}">${STATUS_LABELS[order.status]}</span>
         <div class="field" style="margin-top:10px"><label>Покупатель</label><div style="font-size:14px">${order.first_name || ''} ${order.last_name || ''} · @${order.username || '—'} (id ${order.telegram_id})</div></div>
+        <div class="field"><label>Телефон</label><div style="font-size:14px">${order.phone || '—'}</div></div>
         ${orderItemsHtml(order)}
         <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${order.total} ₽</span></div>
         <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${order.address || '—'}</div></div>
@@ -685,6 +756,7 @@ function openManageOrderDetailModal(order) {
     if (deliverBtn) deliverBtn.onclick = async () => {
       const comment = document.getElementById('mo-admin-comment').value.trim();
       if (!comment) { toast('Укажите время и место доставки'); return; }
+      if (!confirm('Отправить заказ в доставку?')) return;
       try {
         await api(`/api/orders/${order.id}/deliver`, { method: 'PUT', body: { admin_comment: comment } });
         backdrop.remove();
@@ -694,6 +766,7 @@ function openManageOrderDetailModal(order) {
     };
     const completeBtn = backdrop.querySelector('#mo-complete');
     if (completeBtn) completeBtn.onclick = async () => {
+      if (!confirm('Отметить заказ как доставленный?')) return;
       try {
         await api(`/api/orders/${order.id}/complete`, { method: 'PUT' });
         backdrop.remove();
@@ -703,13 +776,25 @@ function openManageOrderDetailModal(order) {
     };
     const paidBtn = backdrop.querySelector('#mo-paid');
     if (paidBtn) paidBtn.onclick = async () => {
+      const willBePaid = !order.paid;
+      if (!confirm(willBePaid ? 'Отметить заказ как оплаченный?' : 'Снять отметку об оплате?')) return;
       try {
-        const updated = await api(`/api/orders/${order.id}/paid`, { method: 'PUT', body: { paid: !order.paid } });
+        const updated = await api(`/api/orders/${order.id}/paid`, { method: 'PUT', body: { paid: willBePaid } });
         Object.assign(order, updated);
         draw();
         await loadOrders(); render();
         toast(order.paid ? 'Отмечено как оплачено' : 'Отметка снята');
       } catch (e) { toast('Не удалось обновить оплату'); }
+    };
+    const cancelBtn = backdrop.querySelector('#mo-cancel');
+    if (cancelBtn) cancelBtn.onclick = async () => {
+      if (!confirm('Отменить этот заказ? Товар вернётся на склад.')) return;
+      try {
+        await api(`/api/orders/${order.id}`, { method: 'DELETE' });
+        backdrop.remove();
+        toast('Заказ отменён, товар возвращён на склад');
+        await loadOrders(); render();
+      } catch (e) { toast('Не удалось отменить заказ'); }
     };
   }
   draw();
@@ -734,31 +819,130 @@ async function openUserDetailModal(userId) {
   const u = await api(`/api/users/${userId}`);
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
-  backdrop.innerHTML = `
-    <div class="modal-sheet">
-      <h3>${u.first_name || ''} ${u.last_name || ''}</h3>
-      <div class="field"><label>Telegram ID</label><div style="font-size:14px">${u.telegram_id}</div></div>
-      <div class="field"><label>Username</label><div style="font-size:14px">@${u.username || '—'}</div></div>
-      <div class="field"><label>Телефон</label><div style="font-size:14px">${u.phone || '—'}</div></div>
-      <div class="field"><label>Дата рождения</label><div style="font-size:14px">${u.birth_date ? fmtDate(u.birth_date) : '—'}</div></div>
-      <div class="stats-row">
-        <div class="stat-box"><div class="num">${u.stats.ordersCount}</div><div class="lbl">Заказов</div></div>
-        <div class="stat-box"><div class="num">${u.stats.totalSpent} ₽</div><div class="lbl">Потрачено</div></div>
+
+  function draw() {
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        <h3>${u.first_name || ''} ${u.last_name || ''}</h3>
+        <div class="field"><label>Telegram ID</label><div style="font-size:14px">${u.telegram_id}</div></div>
+        <div class="field"><label>Username</label><div style="font-size:14px">@${u.username || '—'}</div></div>
+        <div class="field"><label>Телефон</label><div style="font-size:14px">${u.phone || '—'}</div></div>
+        <div class="field"><label>Дата рождения</label><div style="font-size:14px">${u.birth_date ? fmtDate(u.birth_date) : '—'}</div></div>
+        <div class="stats-row">
+          <div class="stat-box"><div class="num">${u.stats.ordersCount}</div><div class="lbl">Заказов</div></div>
+          <div class="stat-box"><div class="num">${u.stats.totalSpent} ₽</div><div class="lbl">Потрачено</div></div>
+        </div>
+        ${renderBonusCard(u.bonus)}
+        <button class="btn btn-primary btn-block" id="ud-add-order">➕ Добавить выполненный заказ вручную</button>
+        <div class="manage-group-title" style="padding-left:0">История заказов</div>
+        ${u.orders.length === 0 ? `<div style="font-size:13px;color:var(--ink-soft)">Заказов пока нет</div>` :
+          u.orders.map(o => `
+            <div class="list-item">
+              <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
+              <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
+              <div class="row-between">
+                <span class="price-tag">${o.total} ₽</span>
+                <button class="btn btn-danger" style="padding:6px 12px;font-size:12px" data-delete-user-order="${o.id}">Удалить</button>
+              </div>
+            </div>
+          `).join('')
+        }
+        <button class="btn btn-ghost btn-block" id="ud-close" style="margin-top:10px">Закрыть</button>
       </div>
-      <div class="manage-group-title" style="padding-left:0">История заказов</div>
-      ${u.orders.length === 0 ? `<div style="font-size:13px;color:var(--ink-soft)">Заказов пока нет</div>` :
-        u.orders.map(o => `
-          <div class="list-item">
-            <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
-            <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <span class="price-tag">${o.total} ₽</span>
-          </div>
-        `).join('')
-      }
-      <button class="btn btn-ghost btn-block" id="ud-close" style="margin-top:10px">Закрыть</button>
-    </div>
-  `;
-  backdrop.querySelector('#ud-close').onclick = () => backdrop.remove();
+    `;
+    backdrop.querySelector('#ud-close').onclick = () => backdrop.remove();
+    backdrop.querySelector('#ud-add-order').onclick = () => openManualOrderModal(u, () => reload());
+    backdrop.querySelectorAll('[data-delete-user-order]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Удалить этот заказ из истории покупателя? Если он был выполнен — товар вернётся на склад, а сумма уйдёт из бухгалтерии.')) return;
+        try {
+          await api(`/api/orders/${btn.dataset.deleteUserOrder}`, { method: 'DELETE' });
+          toast('Заказ удалён');
+          await reload();
+        } catch (e) { toast('Не удалось удалить заказ'); }
+      };
+    });
+  }
+
+  async function reload() {
+    const fresh = await api(`/api/users/${userId}`);
+    Object.assign(u, fresh);
+    draw();
+    await loadUsers();
+  }
+
+  draw();
+  document.body.appendChild(backdrop);
+}
+
+function openManualOrderModal(user, onDone) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const picked = {}; // product_id -> qty
+
+  function total() {
+    return Object.entries(picked).reduce((sum, [id, qty]) => {
+      const p = state.products.find(pr => pr.id === Number(id));
+      return sum + (p ? p.price * qty : 0);
+    }, 0);
+  }
+
+  function draw(filter = '') {
+    const filtered = state.products.filter(p => p.active && p.name.toLowerCase().includes(filter.toLowerCase()));
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        <h3>Добавить выполненный заказ</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px">Для продаж, оформленных не через бота — спишет склад и добавит сумму в бухгалтерию и бонусы клиента.</p>
+        <div class="field"><input id="mo-search" placeholder="Поиск товара..." value="${filter}" /></div>
+        <div style="max-height:240px;overflow-y:auto">
+          ${filtered.map(p => `
+            <div class="manage-row" style="cursor:default">
+              <div class="info"><div class="n">${p.name}</div><div class="m">${p.brand || '—'} · ${p.price} ₽ · ост. ${p.stock}</div></div>
+              <div class="qty-control">
+                <button data-mo-dec="${p.id}">−</button>
+                <span>${picked[p.id] || 0}</span>
+                <button data-mo-inc="${p.id}" ${(picked[p.id] || 0) >= p.stock ? 'disabled' : ''}>+</button>
+              </div>
+            </div>
+          `).join('') || `<div style="font-size:13px;color:var(--ink-soft);padding:10px 0">Ничего не найдено</div>`}
+        </div>
+        <div class="row-between" style="margin:12px 0"><strong>Итого</strong><span class="price-tag">${total()} ₽</span></div>
+        <div class="field"><label>Описание (необязательно)</label><input id="mo-description" placeholder="напр. Продано лично в зале" /></div>
+        <button class="btn btn-primary btn-block" id="mo-submit">Оформить</button>
+        <button class="btn btn-ghost btn-block" id="mo-cancel-modal" style="margin-top:8px">Отмена</button>
+      </div>
+    `;
+    backdrop.querySelector('#mo-search').oninput = (e) => draw(e.target.value);
+    backdrop.querySelector('#mo-search').focus();
+    backdrop.querySelectorAll('[data-mo-inc]').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.moInc;
+        const p = state.products.find(pr => pr.id === Number(id));
+        if ((picked[id] || 0) < p.stock) { picked[id] = (picked[id] || 0) + 1; draw(backdrop.querySelector('#mo-search').value); }
+      };
+    });
+    backdrop.querySelectorAll('[data-mo-dec]').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.moDec;
+        if (picked[id] > 0) { picked[id]--; if (picked[id] === 0) delete picked[id]; draw(backdrop.querySelector('#mo-search').value); }
+      };
+    });
+    backdrop.querySelector('#mo-cancel-modal').onclick = () => backdrop.remove();
+    backdrop.querySelector('#mo-submit').onclick = async () => {
+      const items = Object.entries(picked).map(([id, qty]) => ({ product_id: Number(id), qty }));
+      if (items.length === 0) { toast('Выберите хотя бы один товар'); return; }
+      if (!confirm('Оформить выполненный заказ вручную?')) return;
+      const description = document.getElementById('mo-description').value.trim();
+      try {
+        await api(`/api/users/${user.id}/manual-order`, { method: 'POST', body: { items, description } });
+        backdrop.remove();
+        toast('Заказ добавлен');
+        await loadProducts();
+        if (onDone) await onDone();
+      } catch (e) { toast('Не удалось оформить заказ'); }
+    };
+  }
+  draw();
   document.body.appendChild(backdrop);
 }
 
@@ -779,7 +963,10 @@ function renderManageLedger() {
             <div class="desc">${e.description || (e.type === 'income' ? 'Доход' : 'Расход')}</div>
             <div class="date">${fmtDate(e.date)}${e.auto ? ' · авто' : ''}</div>
           </div>
-          <div class="amt ${e.type}">${e.type === 'income' ? '+' : '−'}${e.amount} ₽</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="amt ${e.type}">${e.type === 'income' ? '+' : '−'}${e.amount} ₽</div>
+            <button class="icon-btn" data-action="delete-ledger-entry" data-id="${e.id}">🗑</button>
+          </div>
         </div>
       `).join('')
     }
@@ -1179,6 +1366,17 @@ function attachEvents() {
   if (ledgerIncomeBtn) ledgerIncomeBtn.onclick = () => openLedgerEntryModal('income');
   const ledgerExpenseBtn = app.querySelector('[data-action="ledger-expense"]');
   if (ledgerExpenseBtn) ledgerExpenseBtn.onclick = () => openLedgerEntryModal('expense');
+  app.querySelectorAll('[data-action="delete-ledger-entry"]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Удалить эту запись из истории?')) return;
+      try {
+        await api(`/api/ledger/${btn.dataset.id}`, { method: 'DELETE' });
+        await loadLedger();
+        render();
+        toast('Запись удалена');
+      } catch (e) { toast('Не удалось удалить запись'); }
+    };
+  });
 }
 
 loadInitialData();

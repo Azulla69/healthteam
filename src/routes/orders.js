@@ -40,7 +40,7 @@ router.delete('/:id', requireAuth, (req, res) => {
   const order = db.getOrderRaw(req.params.id);
   if (!order) return res.status(404).json({ error: 'not_found' });
   if (order.user_id !== req.user.id && !req.isAdmin) return res.status(403).json({ error: 'forbidden' });
-  const result = db.cancelOrder(req.params.id);
+  const result = db.adminOrUserCancel(req.params.id, { isAdmin: req.isAdmin });
   if (result.error) return errorResponse(res, result);
   res.json({ deleted: true });
 });
