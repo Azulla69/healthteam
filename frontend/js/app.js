@@ -14,10 +14,16 @@ const state = {
   selectedSubcategory: null,
   sortBy: 'default',
 
-  manageTab: 'products',
+  // Управление
+  manageSection: null, // null | catalog | orders | users | ledger | stats
+  manageCatalogView: 'menu', // menu | list
+  manageOrdersTab: 'processing', // processing | delivering | completed
+  usersData: [],
+  ledgerData: { balance: 0, entries: [] },
+  statsData: null,
 };
 
-const STATUS_LABELS = { new: 'Принято в обработку', confirmed: 'Доставляем', done: 'Выполнено', cancelled: 'Отменён' };
+const STATUS_LABELS = { processing: 'Принято в обработку', delivering: 'Доставляем', completed: 'Выполнено', cancelled: 'Отменён' };
 
 function effectiveAdmin() { return state.isAdmin && !state.viewAsClient; }
 function saveCart() { localStorage.setItem('cart', JSON.stringify(state.cart)); }
@@ -30,6 +36,7 @@ function toast(msg) {
   setTimeout(() => el.remove(), 2200);
 }
 function profileComplete(user) { return !!(user && user.first_name && user.last_name && user.phone); }
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString('ru-RU') : '—'; }
 
 if (tg) { tg.ready(); tg.expand(); }
 
@@ -47,16 +54,15 @@ async function loadInitialData() {
 }
 
 async function loadProducts() { state.products = await api('/api/catalog'); }
-
-async function loadOrders() {
-  state.orders = effectiveAdmin() ? await api('/api/orders') : await api('/api/orders/my');
-}
-
+async function loadOrders() { state.orders = effectiveAdmin() ? await api('/api/orders') : await api('/api/orders/my'); }
 async function refreshMyActiveOrders() {
   if (!state.user) return;
   const mine = await api('/api/orders/my');
-  state.myActiveOrdersCount = mine.filter(o => ['new', 'confirmed'].includes(o.status)).length;
+  state.myActiveOrdersCount = mine.filter(o => ['processing', 'delivering'].includes(o.status)).length;
 }
+async function loadUsers() { state.usersData = await api('/api/users'); }
+async function loadLedger() { state.ledgerData = await api('/api/ledger'); }
+async function loadStats() { state.statsData = await api('/api/stats'); }
 
 // ---------- Рендер ----------
 const app = document.getElementById('app');
@@ -94,7 +100,7 @@ function renderTabbar() {
   `;
 }
 
-// ---------- Каталог ----------
+// ================= КАТАЛОГ (покупатель) =================
 const SECTION_ORDER = ['БАДы', 'Спортпит'];
 const SECTION_EMOJI = { 'БАДы': '💊', 'Спортпит': '🥤' };
 
@@ -176,7 +182,6 @@ function renderProductCard(p) {
   `;
 }
 
-// ---------- Модалка карточки товара ----------
 function openProductDetailModal(product) {
   const inCart = state.cart[product.id] || 0;
   const backdrop = document.createElement('div');
@@ -225,7 +230,7 @@ function openProductDetailModal(product) {
   document.body.appendChild(backdrop);
 }
 
-// ---------- Корзина ----------
+// ================= КОРЗИНА =================
 function renderCart() {
   const items = Object.entries(state.cart)
     .map(([id, qty]) => ({ product: state.products.find(p => p.id === Number(id)), qty }))
@@ -260,27 +265,18 @@ function renderCart() {
           <strong>Итого</strong>
           <span class="price-tag">${total} ₽</span>
         </div>
-
         ${!state.user ? `<div class="empty-state"><h3>Нужен вход через Telegram</h3></div>` :
-          limitReached ? `
-            <div class="limit-banner">У вас уже 3 активных заказа — это максимум одновременно. Дождитесь выполнения или отмените один из текущих заказов во вкладке «Заказы», прежде чем оформить новый.</div>
-          ` :
+          limitReached ? `<div class="limit-banner">У вас уже 3 активных заказа — это максимум одновременно. Дождитесь выполнения или отмените один из текущих заказов во вкладке «Заказы».</div>` :
           !complete ? `
-            <div class="profile-incomplete">Перед оформлением заказа заполните имя, фамилию и телефон в профиле — дальше указывать их снова не нужно.</div>
+            <div class="profile-incomplete">Перед оформлением заказа заполните имя, фамилию и телефон в профиле.</div>
             <button class="btn btn-primary btn-block" data-action="go-to-profile">Заполнить профиль</button>
           ` : `
             <div class="checkout-readonly">
               <span>${state.user.first_name} ${state.user.last_name} · ${state.user.phone}</span>
               <a data-action="go-to-profile" href="#">изменить</a>
             </div>
-            <div class="field">
-              <label>Адрес доставки</label>
-              <textarea id="checkout-address" placeholder="Город, улица, дом, квартира">${state.user.address || ''}</textarea>
-            </div>
-            <div class="field">
-              <label>Комментарий к заказу</label>
-              <textarea id="checkout-comment" placeholder="Необязательно"></textarea>
-            </div>
+            <div class="field"><label>Адрес доставки</label><textarea id="checkout-address" placeholder="Город, улица, дом, квартира">${state.user.address || ''}</textarea></div>
+            <div class="field"><label>Комментарий к заказу</label><textarea id="checkout-comment" placeholder="Необязательно"></textarea></div>
             <button class="btn btn-amber btn-block" data-action="checkout">Оформить заказ</button>
           `
         }
@@ -289,7 +285,7 @@ function renderCart() {
   `;
 }
 
-// ---------- Заказы (для покупателя) ----------
+// ================= ЗАКАЗЫ (покупатель) =================
 function renderOrders() {
   return `
     <div class="topbar"><div><div class="eyebrow">Мои заказы</div><h1>Заказы</h1></div></div>
@@ -303,7 +299,7 @@ function renderOrders() {
               <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
             </div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <div class="row-between"><span class="price-tag">${o.total} ₽</span></div>
+            <div class="row-between"><span class="price-tag">${o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
           </div>
         `).join('')
       }
@@ -311,10 +307,8 @@ function renderOrders() {
   `;
 }
 
-function orderDetailHtml(o, { editable }) {
+function orderItemsHtml(o) {
   return `
-    <h3>Заказ №${o.id}</h3>
-    <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
     <div class="list-item" style="margin-top:14px">
       ${o.items.map(i => `
         <div class="cart-line-thumb" style="padding:8px 0;border-bottom:1px solid var(--line)">
@@ -327,9 +321,6 @@ function orderDetailHtml(o, { editable }) {
         </div>
       `).join('')}
     </div>
-    <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${o.total} ₽</span></div>
-    <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${o.address || '—'}</div></div>
-    ${o.comment ? `<div class="field"><label>Комментарий</label><div style="font-size:14px">${o.comment}</div></div>` : ''}
   `;
 }
 
@@ -340,8 +331,13 @@ function openOrderDetailModal(order) {
   function drawView() {
     backdrop.innerHTML = `
       <div class="modal-sheet">
-        ${orderDetailHtml(order, {})}
-        ${order.status === 'new' ? `
+        <h3>Заказ №${order.id}</h3>
+        <span class="status-badge status-${order.status}">${STATUS_LABELS[order.status]}</span>
+        ${orderItemsHtml(order)}
+        <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${order.total} ₽</span></div>
+        <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${order.address || '—'}</div></div>
+        ${order.comment ? `<div class="field"><label>Комментарий</label><div style="font-size:14px">${order.comment}</div></div>` : ''}
+        ${order.status === 'new' || order.status === 'processing' ? `
           <div class="order-actions">
             <button class="btn btn-ghost" id="od-edit">Редактировать</button>
             <button class="btn btn-danger" id="od-cancel">Удалить заказ</button>
@@ -351,7 +347,7 @@ function openOrderDetailModal(order) {
       </div>
     `;
     backdrop.querySelector('#od-close').onclick = () => backdrop.remove();
-    if (order.status === 'new') {
+    if (order.status === 'processing') {
       backdrop.querySelector('#od-edit').onclick = () => drawEdit();
       backdrop.querySelector('#od-cancel').onclick = async () => {
         if (!confirm('Удалить этот заказ?')) return;
@@ -370,7 +366,6 @@ function openOrderDetailModal(order) {
   function drawEdit() {
     const editItems = order.items.map(i => ({ ...i }));
     function total() { return editItems.reduce((s, i) => s + i.price * i.qty, 0); }
-
     function drawEditInner() {
       backdrop.innerHTML = `
         <div class="modal-sheet">
@@ -403,10 +398,7 @@ function openOrderDetailModal(order) {
         </div>
       `;
       backdrop.querySelectorAll('[data-edit-dec]').forEach(btn => {
-        btn.onclick = () => {
-          const idx = Number(btn.dataset.editDec);
-          if (editItems[idx].qty > 1) { editItems[idx].qty--; drawEditInner(); }
-        };
+        btn.onclick = () => { const idx = Number(btn.dataset.editDec); if (editItems[idx].qty > 1) { editItems[idx].qty--; drawEditInner(); } };
       });
       backdrop.querySelectorAll('[data-edit-inc]').forEach(btn => {
         btn.onclick = () => {
@@ -422,8 +414,7 @@ function openOrderDetailModal(order) {
         if (!address) { toast('Укажите адрес доставки'); return; }
         try {
           const updated = await api(`/api/orders/${order.id}`, {
-            method: 'PUT',
-            body: { items: editItems.map(i => ({ product_id: i.product_id, qty: i.qty })), address, comment }
+            method: 'PUT', body: { items: editItems.map(i => ({ product_id: i.product_id, qty: i.qty })), address, comment }
           });
           Object.assign(order, updated);
           backdrop.remove();
@@ -440,13 +431,10 @@ function openOrderDetailModal(order) {
   document.body.appendChild(backdrop);
 }
 
-// ---------- Профиль ----------
+// ================= ПРОФИЛЬ =================
 function renderProfile() {
   if (!state.user) {
-    return `
-      <div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div>
-      <div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>
-    `;
+    return `<div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div><div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>`;
   }
   const initial = (state.user.first_name || state.user.username || '?').charAt(0).toUpperCase();
   const stats = state.user.stats || { ordersCount: 0, totalSpent: 0 };
@@ -476,7 +464,7 @@ function renderProfile() {
         <div class="stat-box"><div class="num">${stats.ordersCount}</div><div class="lbl">Заказов сделано</div></div>
         <div class="stat-box"><div class="num">${stats.totalSpent} ₽</div><div class="lbl">Всего потрачено</div></div>
       </div>
-      ${!profileComplete(state.user) ? `<div class="profile-incomplete">Заполните имя, фамилию и телефон в настройках (⚙️ вверху) — это нужно один раз.</div>` : ''}
+      ${!profileComplete(state.user) ? `<div class="profile-incomplete">Заполните имя, фамилию и телефон в настройках (⚙️ вверху).</div>` : ''}
     </div>
   `;
 }
@@ -485,8 +473,7 @@ function openSettingsModal() {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const u = state.user;
-  const cooldown = db_checkCooldownClientSide(u);
-
+  const cooldown = clientCooldownCheck(u);
   backdrop.innerHTML = `
     <div class="modal-sheet">
       <h3>Настройки профиля</h3>
@@ -496,7 +483,7 @@ function openSettingsModal() {
       <div class="field">
         <label>Дата рождения</label>
         <input id="s-birth" type="date" value="${u.birth_date || ''}" ${cooldown.blocked ? 'disabled' : ''} />
-        ${cooldown.blocked ? `<div style="font-size:11px;color:var(--amber-dark);margin-top:4px">Дату рождения можно менять раз в 6 месяцев. Следующее изменение будет доступно ${cooldown.nextDateStr}.</div>` : ''}
+        ${cooldown.blocked ? `<div style="font-size:11px;color:var(--amber-dark);margin-top:4px">Дату рождения можно менять раз в 6 месяцев. Следующее изменение — ${cooldown.nextDateStr}.</div>` : ''}
       </div>
       <button class="btn btn-primary btn-block" id="s-save">Сохранить</button>
       <button class="btn btn-ghost btn-block" id="s-cancel" style="margin-top:8px">Отмена</button>
@@ -516,79 +503,123 @@ function openSettingsModal() {
       backdrop.remove();
       toast('Профиль обновлён');
       render();
-    } catch (e) {
-      toast('Дату рождения пока менять нельзя (раз в 6 месяцев)');
-    }
+    } catch (e) { toast('Дату рождения пока менять нельзя (раз в 6 месяцев)'); }
   };
 }
 
-// Проверка cooldown на фронте — только для UI-подсказки, реальная проверка всегда на сервере
-function db_checkCooldownClientSide(u) {
+function clientCooldownCheck(u) {
   if (!u.birth_date_updated_at) return { blocked: false };
   const last = new Date(u.birth_date_updated_at);
   const nextAllowed = new Date(last);
   nextAllowed.setMonth(nextAllowed.getMonth() + 6);
-  if (new Date() < nextAllowed) {
-    return { blocked: true, nextDateStr: nextAllowed.toLocaleDateString('ru-RU') };
-  }
+  if (new Date() < nextAllowed) return { blocked: true, nextDateStr: nextAllowed.toLocaleDateString('ru-RU') };
   return { blocked: false };
 }
 
-// ---------- Управление (админ) ----------
+// ================= УПРАВЛЕНИЕ =================
+const MANAGE_TILES = [
+  { id: 'catalog', label: 'Каталог', emoji: '📦' },
+  { id: 'orders', label: 'Заказы', emoji: '🧾' },
+  { id: 'users', label: 'Пользователи', emoji: '👥' },
+  { id: 'ledger', label: 'Бухгалтерия', emoji: '💰' },
+  { id: 'stats', label: 'Статистика', emoji: '📊' },
+];
+
 function renderManage() {
-  const tabs = [{ id: 'products', label: 'Товары' }, { id: 'orders', label: 'Заказы' }];
+  if (!state.manageSection) {
+    return `
+      <div class="topbar"><div><div class="eyebrow">Админ-панель</div><h1>Управление</h1></div></div>
+      <div class="manage-menu">
+        ${MANAGE_TILES.map(t => `
+          <div class="manage-menu-tile" data-manage-section="${t.id}">
+            <div class="emoji">${t.emoji}</div>
+            <div class="name">${t.label}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+  const title = MANAGE_TILES.find(t => t.id === state.manageSection)?.label || '';
+  let inner = '';
+  if (state.manageSection === 'catalog') inner = renderManageCatalog();
+  else if (state.manageSection === 'orders') inner = renderManageOrders();
+  else if (state.manageSection === 'users') inner = renderManageUsers();
+  else if (state.manageSection === 'ledger') inner = renderManageLedger();
+  else if (state.manageSection === 'stats') inner = renderManageStats();
+
   return `
-    <div class="topbar"><div><div class="eyebrow">Админ-панель</div><h1>Управление</h1></div></div>
-    <div class="manage-pills">
-      ${tabs.map(t => `<div class="manage-pill ${state.manageTab === t.id ? 'active' : ''}" data-manage-tab="${t.id}">${t.label}</div>`).join('')}
-    </div>
-    ${state.manageTab === 'products' ? renderManageProducts() : renderManageOrders()}
-    ${state.manageTab === 'products' ? `<button class="fab" data-action="add-product">+</button>` : ''}
+    <div class="topbar"><div><div class="eyebrow">Управление</div><h1>${title}</h1></div></div>
+    <div class="back-row" data-action="back-to-manage-menu">← Все разделы</div>
+    ${inner}
   `;
 }
 
-function renderManageProducts() {
-  const bySection = {};
-  state.products.forEach(p => {
-    const sec = p.section || 'Без раздела';
-    bySection[sec] = bySection[sec] || [];
-    bySection[sec].push(p);
-  });
-  return Object.entries(bySection).map(([sec, items]) => `
-    <div class="manage-group-title">${sec}</div>
-    ${items.map(p => `
-      <div class="manage-row" style="${p.active ? '' : 'opacity:0.5'}">
-        <div class="info">
-          <div class="n">${p.name}</div>
-          <div class="m">${p.category || '—'} · ${p.brand || '—'} · ${p.price} ₽ · ост. ${p.stock}</div>
-        </div>
-        <div class="acts">
-          <button class="icon-btn" data-action="edit-product" data-id="${p.id}">✏️</button>
-          <button class="icon-btn" data-action="delete-product" data-id="${p.id}">🗑</button>
-        </div>
-      </div>
-    `).join('')}
-  `).join('') || `<div class="empty-state"><h3>Товаров пока нет</h3></div>`;
+// ---- Управление: Каталог ----
+function renderManageCatalog() {
+  if (state.manageCatalogView === 'list') {
+    const bySection = {};
+    state.products.forEach(p => { const sec = p.section || 'Без раздела'; bySection[sec] = bySection[sec] || []; bySection[sec].push(p); });
+    return `
+      <div class="back-row" data-action="back-to-catalog-menu">← Меню каталога</div>
+      ${Object.entries(bySection).map(([sec, items]) => `
+        <div class="manage-group-title">${sec}</div>
+        ${items.map(p => `
+          <div class="manage-row" data-open-manage-product="${p.id}" style="${p.active ? '' : 'opacity:0.5'}">
+            <div class="info">
+              <div class="n">${p.name}</div>
+              <div class="m">${p.brand || '—'} · ост. ${p.stock} шт.</div>
+              <div class="expiry-tag ${isExpirySoon(p.nearestExpiry) ? 'expiry-soon' : ''}">Годен до: ${p.nearestExpiry ? fmtDate(p.nearestExpiry) : '—'}</div>
+            </div>
+          </div>
+        `).join('')}
+      `).join('') || `<div class="empty-state"><h3>Товаров пока нет</h3></div>`}
+    `;
+  }
+  return `
+    <div class="manage-actions-list">
+      <button class="manage-action-btn" data-action="mc-add-product"><span class="emoji">➕</span> Добавить новый товар</button>
+      <button class="manage-action-btn" data-action="mc-add-stock"><span class="emoji">📥</span> Добавить товар на склад</button>
+      <button class="manage-action-btn" data-action="mc-remove-stock"><span class="emoji">📤</span> Удалить товар со склада</button>
+      <button class="manage-action-btn" data-action="mc-list"><span class="emoji">📋</span> Список товаров</button>
+    </div>
+  `;
 }
 
+function isExpirySoon(dateStr) {
+  if (!dateStr) return false;
+  const days = (new Date(dateStr) - new Date()) / 86400000;
+  return days < 30;
+}
+
+// ---- Управление: Заказы ----
 function renderManageOrders() {
+  const counts = { processing: 0, delivering: 0, completed: 0 };
+  state.orders.forEach(o => { if (counts[o.status] !== undefined) counts[o.status]++; });
+  const tabs = [
+    { id: 'processing', label: 'В обработке' },
+    { id: 'delivering', label: 'Доставляем' },
+    { id: 'completed', label: 'Выполненные' },
+  ];
+  const list = state.orders.filter(o => o.status === state.manageOrdersTab);
   return `
+    <div class="order-status-tiles">
+      ${tabs.map(t => `
+        <div class="order-status-tile ${state.manageOrdersTab === t.id ? 'active' : ''}" data-manage-orders-tab="${t.id}">
+          <div class="num">${counts[t.id]}</div><div class="lbl">${t.label}</div>
+        </div>
+      `).join('')}
+    </div>
     <div class="section">
-      ${state.orders.length === 0 ? `<div class="empty-state"><h3>Заказов пока нет</h3></div>` :
-        state.orders.map(o => `
-          <div class="list-item order-card" data-open-order="${o.id}">
+      ${list.length === 0 ? `<div class="empty-state"><h3>Заказов нет</h3></div>` :
+        list.map(o => `
+          <div class="list-item order-card" data-open-manage-order="${o.id}">
             <div class="row-between">
               <strong>Заказ №${o.id}</strong>
-              <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
+              ${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}
             </div>
             <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'}</div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <div class="row-between">
-              <span class="price-tag">${o.total} ₽</span>
-              <select data-action="change-status" data-id="${o.id}" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line)" onclick="event.stopPropagation()">
-                ${Object.entries(STATUS_LABELS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}
-              </select>
-            </div>
+            <div class="row-between"><span class="price-tag">${o.total} ₽</span></div>
           </div>
         `).join('')
       }
@@ -596,7 +627,209 @@ function renderManageOrders() {
   `;
 }
 
-// ---------- Модалка товара (админ) ----------
+function openManageOrderDetailModal(order) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+
+  function draw() {
+    let actionsHtml = '';
+    if (order.status === 'processing') {
+      actionsHtml = `
+        <div class="field"><label>Время и место доставки (обязательно)</label><textarea id="mo-admin-comment" placeholder="напр. Вторник, 18:00, у подъезда"></textarea></div>
+        <button class="btn btn-amber btn-block" id="mo-deliver">В доставку</button>
+      `;
+    } else if (order.status === 'delivering') {
+      actionsHtml = `
+        <div class="field"><label>Комментарий администратора (время/место доставки)</label><div style="font-size:14px">${order.admin_comment || '—'}</div></div>
+        <div class="order-actions">
+          <button class="btn btn-primary" id="mo-complete">Доставлен</button>
+          <button class="btn ${order.paid ? 'btn-primary' : 'btn-ghost'}" id="mo-paid">${order.paid ? 'Оплачено ✓' : 'Оплачен'}</button>
+        </div>
+      `;
+    } else if (order.status === 'completed') {
+      actionsHtml = `
+        <div class="field"><label>Комментарий администратора</label><div style="font-size:14px">${order.admin_comment || '—'}</div></div>
+        <div class="row-between" style="margin-top:8px">
+          <span style="font-size:13px;color:var(--ink-soft)">Оплата</span>
+          ${order.paid ? `<span class="paid-badge">Оплачено</span>` : `<button class="btn btn-ghost" id="mo-paid">Отметить оплаченным</button>`}
+        </div>
+      `;
+    }
+
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        <h3>Заказ №${order.id}</h3>
+        <span class="status-badge status-${order.status}">${STATUS_LABELS[order.status]}</span>
+        <div class="field" style="margin-top:10px"><label>Покупатель</label><div style="font-size:14px">${order.first_name || ''} ${order.last_name || ''} · @${order.username || '—'} (id ${order.telegram_id})</div></div>
+        ${orderItemsHtml(order)}
+        <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${order.total} ₽</span></div>
+        <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${order.address || '—'}</div></div>
+        <div class="field"><label>Комментарий покупателя</label><div style="font-size:14px">${order.comment || '—'}</div></div>
+        ${actionsHtml}
+        <button class="btn btn-ghost btn-block" id="mo-close" style="margin-top:10px">Закрыть</button>
+      </div>
+    `;
+    backdrop.querySelector('#mo-close').onclick = () => backdrop.remove();
+
+    const deliverBtn = backdrop.querySelector('#mo-deliver');
+    if (deliverBtn) deliverBtn.onclick = async () => {
+      const comment = document.getElementById('mo-admin-comment').value.trim();
+      if (!comment) { toast('Укажите время и место доставки'); return; }
+      try {
+        await api(`/api/orders/${order.id}/deliver`, { method: 'PUT', body: { admin_comment: comment } });
+        backdrop.remove();
+        toast('Заказ передан в доставку');
+        await loadOrders(); render();
+      } catch (e) { toast('Не удалось обновить заказ'); }
+    };
+    const completeBtn = backdrop.querySelector('#mo-complete');
+    if (completeBtn) completeBtn.onclick = async () => {
+      try {
+        await api(`/api/orders/${order.id}/complete`, { method: 'PUT' });
+        backdrop.remove();
+        toast('Заказ выполнен, сумма добавлена в бухгалтерию');
+        await loadOrders(); render();
+      } catch (e) { toast('Не удалось обновить заказ'); }
+    };
+    const paidBtn = backdrop.querySelector('#mo-paid');
+    if (paidBtn) paidBtn.onclick = async () => {
+      try {
+        const updated = await api(`/api/orders/${order.id}/paid`, { method: 'PUT', body: { paid: !order.paid } });
+        Object.assign(order, updated);
+        draw();
+        await loadOrders(); render();
+        toast(order.paid ? 'Отмечено как оплачено' : 'Отметка снята');
+      } catch (e) { toast('Не удалось обновить оплату'); }
+    };
+  }
+  draw();
+  document.body.appendChild(backdrop);
+}
+
+// ---- Управление: Пользователи ----
+function renderManageUsers() {
+  return state.usersData.length === 0 ? `<div class="empty-state"><h3>Пользователей пока нет</h3></div>` :
+    state.usersData.map(u => `
+      <div class="user-row" data-open-user="${u.id}">
+        <div>
+          <div class="n">${u.first_name || 'Без имени'} ${u.last_name || ''}</div>
+          <div class="m">@${u.username || '—'}</div>
+        </div>
+        <div class="price-tag">${u.stats.totalSpent} ₽</div>
+      </div>
+    `).join('');
+}
+
+async function openUserDetailModal(userId) {
+  const u = await api(`/api/users/${userId}`);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>${u.first_name || ''} ${u.last_name || ''}</h3>
+      <div class="field"><label>Telegram ID</label><div style="font-size:14px">${u.telegram_id}</div></div>
+      <div class="field"><label>Username</label><div style="font-size:14px">@${u.username || '—'}</div></div>
+      <div class="field"><label>Телефон</label><div style="font-size:14px">${u.phone || '—'}</div></div>
+      <div class="field"><label>Дата рождения</label><div style="font-size:14px">${u.birth_date ? fmtDate(u.birth_date) : '—'}</div></div>
+      <div class="stats-row">
+        <div class="stat-box"><div class="num">${u.stats.ordersCount}</div><div class="lbl">Заказов</div></div>
+        <div class="stat-box"><div class="num">${u.stats.totalSpent} ₽</div><div class="lbl">Потрачено</div></div>
+      </div>
+      <div class="manage-group-title" style="padding-left:0">История заказов</div>
+      ${u.orders.length === 0 ? `<div style="font-size:13px;color:var(--ink-soft)">Заказов пока нет</div>` :
+        u.orders.map(o => `
+          <div class="list-item">
+            <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
+            <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
+            <span class="price-tag">${o.total} ₽</span>
+          </div>
+        `).join('')
+      }
+      <button class="btn btn-ghost btn-block" id="ud-close" style="margin-top:10px">Закрыть</button>
+    </div>
+  `;
+  backdrop.querySelector('#ud-close').onclick = () => backdrop.remove();
+  document.body.appendChild(backdrop);
+}
+
+// ---- Управление: Бухгалтерия ----
+function renderManageLedger() {
+  const { balance, entries } = state.ledgerData;
+  return `
+    <div class="balance-card"><div class="num">${balance} ₽</div><div class="lbl">Текущий баланс</div></div>
+    <div class="ledger-actions">
+      <button class="btn btn-primary" data-action="ledger-income">Указать доход</button>
+      <button class="btn btn-danger" data-action="ledger-expense">Указать расход</button>
+    </div>
+    <div class="manage-group-title">История</div>
+    ${entries.length === 0 ? `<div class="empty-state"><h3>Записей пока нет</h3></div>` :
+      entries.map(e => `
+        <div class="ledger-entry">
+          <div>
+            <div class="desc">${e.description || (e.type === 'income' ? 'Доход' : 'Расход')}</div>
+            <div class="date">${fmtDate(e.date)}${e.auto ? ' · авто' : ''}</div>
+          </div>
+          <div class="amt ${e.type}">${e.type === 'income' ? '+' : '−'}${e.amount} ₽</div>
+        </div>
+      `).join('')
+    }
+  `;
+}
+
+function openLedgerEntryModal(type) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const today = new Date().toISOString().slice(0, 10);
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>${type === 'income' ? 'Указать доход' : 'Указать расход'}</h3>
+      <div class="field"><label>Сумма, ₽</label><input id="le-amount" type="number" /></div>
+      <div class="field"><label>Описание</label><input id="le-description" placeholder="напр. Закупка товара" /></div>
+      <div class="field"><label>Дата</label><input id="le-date" type="date" value="${today}" /></div>
+      <button class="btn btn-primary btn-block" id="le-save">Сохранить</button>
+      <button class="btn btn-ghost btn-block" id="le-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('#le-cancel').onclick = () => backdrop.remove();
+  backdrop.querySelector('#le-save').onclick = async () => {
+    const amount = Number(document.getElementById('le-amount').value);
+    const description = document.getElementById('le-description').value.trim();
+    const date = document.getElementById('le-date').value;
+    if (!amount || amount <= 0) { toast('Укажите сумму'); return; }
+    try {
+      await api('/api/ledger', { method: 'POST', body: { type, amount, description, date } });
+      backdrop.remove();
+      await loadLedger();
+      render();
+      toast('Записано');
+    } catch (e) { toast('Не удалось сохранить'); }
+  };
+}
+
+// ---- Управление: Статистика ----
+function renderManageStats() {
+  const s = state.statsData;
+  if (!s) return `<div class="empty-state"><h3>Загрузка...</h3></div>`;
+  return `
+    <div class="stats-grid">
+      <div class="stat-box"><div class="num">${s.usersCount}</div><div class="lbl">Пользователей</div></div>
+      <div class="stat-box"><div class="num">${s.productsCount}</div><div class="lbl">Товаров в каталоге</div></div>
+      <div class="stat-box"><div class="num">${s.totalOrders}</div><div class="lbl">Всего заказов</div></div>
+      <div class="stat-box"><div class="num">${s.totalRevenue} ₽</div><div class="lbl">Выручка (выполненные)</div></div>
+      <div class="stat-box"><div class="num">${s.balance} ₽</div><div class="lbl">Баланс</div></div>
+      <div class="stat-box"><div class="num">${s.ordersByStatus.processing + s.ordersByStatus.delivering}</div><div class="lbl">Активных заказов</div></div>
+    </div>
+    <div class="manage-group-title">Топ товаров по продажам</div>
+    <div class="top-products-list">
+      ${s.topProducts.length === 0 ? `<div style="font-size:13px;color:var(--ink-soft)">Пока нет выполненных заказов</div>` :
+        s.topProducts.map(p => `<div class="top-product-row"><span>${p.name}</span><span>${p.qty} шт. · ${p.revenue} ₽</span></div>`).join('')
+      }
+    </div>
+  `;
+}
+
+// ---- Модалка товара (создание/редактирование карточки) ----
 function openProductModal(product) {
   const isEdit = !!product;
   const sections = [...new Set(state.products.map(p => p.section).filter(Boolean))];
@@ -610,6 +843,11 @@ function openProductModal(product) {
       <h3>${isEdit ? 'Редактировать товар' : 'Новый товар'}</h3>
       <div class="field"><label>Название</label><input id="pf-name" value="${product?.name || ''}" /></div>
       <div class="field">
+        <label>Производитель</label>
+        <input id="pf-brand" list="dl-brands" value="${product?.brand || ''}" placeholder="напр. Maxler" />
+        <datalist id="dl-brands">${brands.map(b => `<option value="${b}">`).join('')}</datalist>
+      </div>
+      <div class="field">
         <label>Раздел</label>
         <input id="pf-section" list="dl-sections" value="${product?.section || ''}" placeholder="БАДы / Спортпит" />
         <datalist id="dl-sections">${sections.map(s => `<option value="${s}">`).join('')}</datalist>
@@ -619,22 +857,18 @@ function openProductModal(product) {
         <input id="pf-category" list="dl-categories" value="${product?.category || ''}" placeholder="напр. Витамины и минералы" />
         <datalist id="dl-categories">${categories.map(c => `<option value="${c}">`).join('')}</datalist>
       </div>
-      <div class="field">
-        <label>Производитель</label>
-        <input id="pf-brand" list="dl-brands" value="${product?.brand || ''}" placeholder="напр. Maxler" />
-        <datalist id="dl-brands">${brands.map(b => `<option value="${b}">`).join('')}</datalist>
-      </div>
       <div class="field"><label>Описание</label><textarea id="pf-description">${product?.description || ''}</textarea></div>
       <div class="field"><label>Цена, ₽</label><input id="pf-price" type="number" value="${product?.price ?? ''}" /></div>
-      <div class="field"><label>Остаток, шт.</label><input id="pf-stock" type="number" value="${product?.stock ?? 0}" /></div>
       ${isEdit ? `
+        <div class="field"><label>Остаток на складе</label><div style="font-size:14px">${product.stock} шт. (меняется через «Добавить/Удалить на складе»)</div></div>
         <div class="field">
           <label>Статус</label>
           <select id="pf-active">
             <option value="1" ${product.active ? 'selected' : ''}>Активен (виден в каталоге)</option>
             <option value="0" ${!product.active ? 'selected' : ''}>Скрыт</option>
           </select>
-        </div>` : ''}
+        </div>
+      ` : `<div class="field"><label>Остаток на складе</label><div style="font-size:13px;color:var(--ink-soft)">Новый товар стартует с 0 — пополните склад отдельно через «Добавить товар на склад»</div></div>`}
       <button class="btn btn-primary btn-block" id="pf-save">Сохранить</button>
       ${isEdit ? `<button class="btn btn-danger btn-block" id="pf-delete" style="margin-top:8px">Удалить товар</button>` : ''}
       <button class="btn btn-ghost btn-block" id="pf-cancel" style="margin-top:8px">Отмена</button>
@@ -651,7 +885,6 @@ function openProductModal(product) {
       brand: backdrop.querySelector('#pf-brand').value.trim(),
       description: backdrop.querySelector('#pf-description').value.trim(),
       price: Number(backdrop.querySelector('#pf-price').value),
-      stock: Number(backdrop.querySelector('#pf-stock').value),
     };
     if (!payload.name || !payload.price) { toast('Заполните название и цену'); return; }
     try {
@@ -679,28 +912,95 @@ function openProductModal(product) {
   }
 }
 
+// ---- Пикер товара для добавления/списания склада ----
+function openStockPickerModal(mode) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>${mode === 'add' ? 'Выберите товар для пополнения' : 'Выберите товар для списания'}</h3>
+      <div class="field"><input id="sp-search" placeholder="Поиск по названию..." /></div>
+      <div id="sp-list"></div>
+      <button class="btn btn-ghost btn-block" id="sp-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  function drawList(filter = '') {
+    const filtered = state.products.filter(p => p.name.toLowerCase().includes(filter.toLowerCase()));
+    backdrop.querySelector('#sp-list').innerHTML = filtered.map(p => `
+      <div class="manage-row" data-pick-product="${p.id}" style="cursor:pointer">
+        <div class="info"><div class="n">${p.name}</div><div class="m">${p.brand || '—'} · ост. ${p.stock} шт.</div></div>
+      </div>
+    `).join('') || `<div style="font-size:13px;color:var(--ink-soft);padding:10px 0">Ничего не найдено</div>`;
+    backdrop.querySelectorAll('[data-pick-product]').forEach(row => {
+      row.onclick = () => {
+        const product = state.products.find(p => p.id === Number(row.dataset.pickProduct));
+        backdrop.remove();
+        openStockAdjustModal(product, mode);
+      };
+    });
+  }
+  drawList();
+  backdrop.querySelector('#sp-search').oninput = (e) => drawList(e.target.value);
+  backdrop.querySelector('#sp-cancel').onclick = () => backdrop.remove();
+}
+
+function openStockAdjustModal(product, mode) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>${mode === 'add' ? 'Добавить на склад' : 'Списать со склада'}</h3>
+      <div class="field"><label>Товар</label><div style="font-size:14px">${product.name} (сейчас на складе: ${product.stock} шт.)</div></div>
+      <div class="field"><label>Количество, шт.</label><input id="sa-qty" type="number" min="1" /></div>
+      ${mode === 'add' ? `<div class="field"><label>Срок годности</label><input id="sa-expiry" type="date" /></div>` : ''}
+      <button class="btn btn-primary btn-block" id="sa-save">${mode === 'add' ? 'Добавить' : 'Списать'}</button>
+      <button class="btn btn-ghost btn-block" id="sa-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('#sa-cancel').onclick = () => backdrop.remove();
+  backdrop.querySelector('#sa-save').onclick = async () => {
+    const qty = Number(document.getElementById('sa-qty').value);
+    if (!qty || qty <= 0) { toast('Укажите количество'); return; }
+    try {
+      if (mode === 'add') {
+        const expiry = document.getElementById('sa-expiry').value;
+        if (!expiry) { toast('Укажите срок годности'); return; }
+        await api(`/api/catalog/${product.id}/stock/add`, { method: 'POST', body: { qty, expiry } });
+        toast('Товар добавлен на склад');
+      } else {
+        if (qty > product.stock) { toast('Нельзя списать больше, чем есть на складе'); return; }
+        await api(`/api/catalog/${product.id}/stock/remove`, { method: 'POST', body: { qty } });
+        toast('Товар списан со склада');
+      }
+      backdrop.remove();
+      await loadProducts();
+      render();
+    } catch (e) { toast('Не удалось сохранить'); }
+  };
+}
+
 // ---------- Обработчики событий ----------
 function attachEvents() {
   app.querySelectorAll('[data-tab]').forEach(btn => {
     btn.onclick = async () => {
       state.view = btn.dataset.tab;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; }
-      if ((state.view === 'orders' || state.view === 'manage') && state.user) await loadOrders();
+      if (state.view === 'orders' && state.user) await loadOrders();
+      if (state.view === 'manage') { state.manageSection = null; }
       if (state.view === 'cart' && state.user) await refreshMyActiveOrders();
       render();
     };
   });
 
+  // Каталог
   app.querySelectorAll('[data-section]').forEach(tile => {
     tile.onclick = () => { state.selectedSection = tile.dataset.section; state.catalogStep = 'subcategories'; render(); };
   });
   app.querySelectorAll('[data-cat]').forEach(item => {
-    item.onclick = () => {
-      state.selectedSubcategory = item.dataset.cat === '__all__' ? null : item.dataset.cat;
-      state.catalogStep = 'products';
-      state.sortBy = 'default';
-      render();
-    };
+    item.onclick = () => { state.selectedSubcategory = item.dataset.cat === '__all__' ? null : item.dataset.cat; state.catalogStep = 'products'; state.sortBy = 'default'; render(); };
   });
   const backToSections = app.querySelector('[data-action="back-to-sections"]');
   if (backToSections) backToSections.onclick = () => { state.catalogStep = 'sections'; state.selectedSection = null; render(); };
@@ -709,12 +1009,8 @@ function attachEvents() {
   const sortSelect = app.querySelector('[data-action="sort-select"]');
   if (sortSelect) sortSelect.onchange = () => { state.sortBy = sortSelect.value; render(); };
 
-  // Открытие карточки товара (клик по карточке, не по кнопке)
   app.querySelectorAll('[data-open-product]').forEach(card => {
-    card.onclick = () => {
-      const product = state.products.find(p => p.id === Number(card.dataset.openProduct));
-      if (product) openProductDetailModal(product);
-    };
+    card.onclick = () => { const product = state.products.find(p => p.id === Number(card.dataset.openProduct)); if (product) openProductDetailModal(product); };
   });
   app.querySelectorAll('[data-action="quick-add"]').forEach(btn => {
     btn.onclick = (e) => {
@@ -723,9 +1019,7 @@ function attachEvents() {
       const current = state.cart[product.id] || 0;
       if (current >= product.stock) { toast('Достигнут максимум остатка'); return; }
       state.cart[product.id] = current + 1;
-      saveCart();
-      toast('Добавлено в корзину');
-      render();
+      saveCart(); toast('Добавлено в корзину'); render();
     };
   });
 
@@ -735,8 +1029,7 @@ function attachEvents() {
       const id = btn.dataset.id;
       const product = state.products.find(p => p.id === Number(id));
       if ((state.cart[id] || 0) >= product.stock) { toast('Достигнут максимум остатка'); return; }
-      state.cart[id] = (state.cart[id] || 0) + 1;
-      saveCart(); render();
+      state.cart[id] = (state.cart[id] || 0) + 1; saveCart(); render();
     };
   });
   app.querySelectorAll('[data-action="dec"]').forEach(btn => {
@@ -747,10 +1040,7 @@ function attachEvents() {
       saveCart(); render();
     };
   });
-
-  app.querySelectorAll('[data-action="go-to-profile"]').forEach(el => {
-    el.onclick = (e) => { e.preventDefault(); state.view = 'profile'; render(); };
-  });
+  app.querySelectorAll('[data-action="go-to-profile"]').forEach(el => { el.onclick = (e) => { e.preventDefault(); state.view = 'profile'; render(); }; });
 
   const checkoutBtn = app.querySelector('[data-action="checkout"]');
   if (checkoutBtn) {
@@ -761,12 +1051,10 @@ function attachEvents() {
       if (!address) { toast('Укажите адрес доставки'); return; }
       try {
         await api('/api/orders', { method: 'POST', body: { items, address, comment, phone: state.user.phone } });
-        state.cart = {};
-        saveCart();
+        state.cart = {}; saveCart();
         toast('Заказ оформлен!');
         state.view = 'orders';
-        await loadOrders();
-        await refreshMyActiveOrders();
+        await loadOrders(); await refreshMyActiveOrders();
         render();
       } catch (e) {
         if (e.message === 'too_many_active_orders') toast('Максимум 3 активных заказа одновременно');
@@ -776,66 +1064,71 @@ function attachEvents() {
     };
   }
 
-  // Заказы (покупатель)
   app.querySelectorAll('[data-open-order]').forEach(card => {
-    card.onclick = () => {
-      const order = state.orders.find(o => o.id === Number(card.dataset.openOrder));
-      if (order) openOrderDetailModal(order);
-    };
+    card.onclick = () => { const order = state.orders.find(o => o.id === Number(card.dataset.openOrder)); if (order) openOrderDetailModal(order); };
   });
 
   // Профиль
   const gearBtn = app.querySelector('[data-action="open-settings"]');
   if (gearBtn) gearBtn.onclick = () => openSettingsModal();
-
   const toggleModeBtn = app.querySelector('[data-action="toggle-view-mode"]');
   if (toggleModeBtn) {
     toggleModeBtn.onclick = () => {
       state.viewAsClient = !state.viewAsClient;
-      state.view = 'catalog';
-      state.catalogStep = 'sections';
+      state.view = 'catalog'; state.catalogStep = 'sections';
       toast(state.viewAsClient ? 'Режим клиента включён' : 'Режим администратора включён');
       render();
     };
   }
 
-  // Смена статуса заказа (админ)
-  app.querySelectorAll('[data-action="change-status"]').forEach(sel => {
-    sel.onchange = async () => {
-      await api(`/api/orders/${sel.dataset.id}/status`, { method: 'PUT', body: { status: sel.value } });
-      await loadOrders();
+  // Управление: навигация
+  app.querySelectorAll('[data-manage-section]').forEach(tile => {
+    tile.onclick = async () => {
+      state.manageSection = tile.dataset.manageSection;
+      state.manageCatalogView = 'menu';
+      if (state.manageSection === 'orders') await loadOrders();
+      if (state.manageSection === 'users') await loadUsers();
+      if (state.manageSection === 'ledger') await loadLedger();
+      if (state.manageSection === 'stats') await loadStats();
       render();
-      toast('Статус обновлён');
     };
+  });
+  const backToManageMenu = app.querySelector('[data-action="back-to-manage-menu"]');
+  if (backToManageMenu) backToManageMenu.onclick = () => { state.manageSection = null; render(); };
+
+  // Управление: Каталог
+  const mcAdd = app.querySelector('[data-action="mc-add-product"]');
+  if (mcAdd) mcAdd.onclick = () => openProductModal(null);
+  const mcAddStock = app.querySelector('[data-action="mc-add-stock"]');
+  if (mcAddStock) mcAddStock.onclick = () => openStockPickerModal('add');
+  const mcRemoveStock = app.querySelector('[data-action="mc-remove-stock"]');
+  if (mcRemoveStock) mcRemoveStock.onclick = () => openStockPickerModal('remove');
+  const mcList = app.querySelector('[data-action="mc-list"]');
+  if (mcList) mcList.onclick = () => { state.manageCatalogView = 'list'; render(); };
+  const backToCatalogMenu = app.querySelector('[data-action="back-to-catalog-menu"]');
+  if (backToCatalogMenu) backToCatalogMenu.onclick = () => { state.manageCatalogView = 'menu'; render(); };
+  app.querySelectorAll('[data-open-manage-product]').forEach(row => {
+    row.onclick = () => { const product = state.products.find(p => p.id === Number(row.dataset.openManageProduct)); if (product) openProductModal(product); };
   });
 
-  // Управление
-  app.querySelectorAll('[data-manage-tab]').forEach(pill => {
-    pill.onclick = async () => {
-      state.manageTab = pill.dataset.manageTab;
-      if (state.manageTab === 'orders') await loadOrders();
-      render();
-    };
+  // Управление: Заказы
+  app.querySelectorAll('[data-manage-orders-tab]').forEach(tile => {
+    tile.onclick = () => { state.manageOrdersTab = tile.dataset.manageOrdersTab; render(); };
   });
-  const addBtn = app.querySelector('[data-action="add-product"]');
-  if (addBtn) addBtn.onclick = () => openProductModal(null);
-  app.querySelectorAll('[data-action="edit-product"]').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const product = state.products.find(p => p.id === Number(btn.dataset.id));
-      openProductModal(product);
-    };
+  app.querySelectorAll('[data-open-manage-order]').forEach(card => {
+    card.onclick = () => { const order = state.orders.find(o => o.id === Number(card.dataset.openManageOrder)); if (order) openManageOrderDetailModal(order); };
   });
-  app.querySelectorAll('[data-action="delete-product"]').forEach(btn => {
-    btn.onclick = async (e) => {
-      e.stopPropagation();
-      if (!confirm('Скрыть товар из каталога?')) return;
-      await api(`/api/catalog/${btn.dataset.id}`, { method: 'DELETE' });
-      await loadProducts();
-      render();
-      toast('Товар скрыт');
-    };
+
+  // Управление: Пользователи
+  app.querySelectorAll('[data-open-user]').forEach(row => {
+    row.onclick = () => openUserDetailModal(row.dataset.openUser);
   });
+
+  // Управление: Бухгалтерия
+  const ledgerIncomeBtn = app.querySelector('[data-action="ledger-income"]');
+  if (ledgerIncomeBtn) ledgerIncomeBtn.onclick = () => openLedgerEntryModal('income');
+  const ledgerExpenseBtn = app.querySelector('[data-action="ledger-expense"]');
+  if (ledgerExpenseBtn) ledgerExpenseBtn.onclick = () => openLedgerEntryModal('expense');
 }
 
 loadInitialData();

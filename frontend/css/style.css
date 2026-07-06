@@ -543,3 +543,89 @@ h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 600; margin: 0; }
   margin-bottom: 14px;
 }
 
+/* ---- Управление: главное меню из 5 плиток ---- */
+.manage-menu {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 4px 16px 16px;
+}
+.manage-menu-tile {
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+}
+.manage-menu-tile .emoji { font-size: 24px; }
+.manage-menu-tile .name { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; }
+
+.manage-actions-list { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 16px; }
+.manage-action-btn {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+.manage-action-btn .emoji { font-size: 20px; }
+
+.expiry-tag { font-size: 11px; color: var(--ink-soft); }
+.expiry-soon { color: var(--danger); font-weight: 600; }
+
+.order-status-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 16px 14px; }
+.order-status-tile {
+  background: var(--surface); border-radius: 12px; box-shadow: var(--shadow);
+  padding: 12px 8px; text-align: center; cursor: pointer; border: 2px solid transparent;
+}
+.order-status-tile.active { border-color: var(--forest); }
+.order-status-tile .num { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 500; color: var(--forest-dark); }
+.order-status-tile .lbl { font-size: 10px; color: var(--ink-soft); margin-top: 2px; }
+
+.paid-badge { background: #DCEFE1; color: #1F7A45; font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+
+.user-row {
+  background: var(--surface); border-radius: 12px; box-shadow: var(--shadow);
+  padding: 12px 14px; margin: 0 16px 8px; display: flex; justify-content: space-between; align-items: center; cursor: pointer;
+}
+.user-row .n { font-size: 14px; font-weight: 600; }
+.user-row .m { font-size: 12px; color: var(--ink-soft); }
+
+.balance-card {
+  background: linear-gradient(160deg, var(--forest), var(--forest-dark));
+  color: #fff;
+  border-radius: 18px;
+  padding: 22px;
+  margin: 0 16px 16px;
+  text-align: center;
+}
+.balance-card .num { font-family: 'JetBrains Mono', monospace; font-size: 30px; font-weight: 500; }
+.balance-card .lbl { font-size: 12px; opacity: 0.85; margin-top: 4px; }
+
+.ledger-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px 16px; }
+
+.ledger-entry {
+  background: var(--surface); border-radius: 10px; box-shadow: var(--shadow);
+  padding: 10px 14px; margin: 0 16px 8px; display: flex; justify-content: space-between; align-items: center;
+}
+.ledger-entry .desc { font-size: 13px; font-weight: 600; }
+.ledger-entry .date { font-size: 11px; color: var(--ink-soft); }
+.ledger-entry .amt.income { color: #1F7A45; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+.ledger-entry .amt.expense { color: var(--danger); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px 16px; }
+.stats-grid .stat-box { grid-column: span 1; }
+.top-products-list { padding: 0 16px; }
+.top-product-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+

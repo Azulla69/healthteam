@@ -7,6 +7,9 @@ const { telegramAuth } = require('./middleware/auth');
 const catalogRoutes = require('./routes/catalog');
 const ordersRoutes = require('./routes/orders');
 const profileRoutes = require('./routes/profile');
+const usersRoutes = require('./routes/users');
+const ledgerRoutes = require('./routes/ledger');
+const statsRoutes = require('./routes/stats');
 
 const app = express();
 
@@ -17,6 +20,9 @@ app.use(telegramAuth); // на каждом запросе проверяем, �
 app.use('/api/catalog', catalogRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/ledger', ledgerRoutes);
+app.use('/api/stats', statsRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
