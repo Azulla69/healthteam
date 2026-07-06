@@ -3,39 +3,33 @@ const state = {
   view: 'catalog',
   user: null,
   isAdmin: false,
-  viewAsClient: false, // переключатель "смотреть как клиент", только для админов
+  viewAsClient: false,
   products: [],
   orders: [],
+  myActiveOrdersCount: 0,
   cart: JSON.parse(localStorage.getItem('cart') || '{}'),
 
-  // навигация по каталогу
-  catalogStep: 'sections', // sections -> subcategories -> products
+  catalogStep: 'sections',
   selectedSection: null,
-  selectedSubcategory: null, // null = "Все товары раздела"
-  sortBy: 'default', // default | brand | price_asc | price_desc
+  selectedSubcategory: null,
+  sortBy: 'default',
 
-  // управление (админ)
-  manageTab: 'products', // products | orders
+  manageTab: 'products',
 };
 
-function effectiveAdmin() {
-  return state.isAdmin && !state.viewAsClient;
-}
+const STATUS_LABELS = { new: 'Принято в обработку', confirmed: 'Доставляем', done: 'Выполнено', cancelled: 'Отменён' };
 
+function effectiveAdmin() { return state.isAdmin && !state.viewAsClient; }
 function saveCart() { localStorage.setItem('cart', JSON.stringify(state.cart)); }
 function cartCount() { return Object.values(state.cart).reduce((a, b) => a + b, 0); }
-
 function toast(msg) {
   const el = document.createElement('div');
   el.className = 'toast';
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2000);
+  setTimeout(() => el.remove(), 2200);
 }
-
-function profileComplete(user) {
-  return !!(user && user.first_name && user.last_name && user.phone);
-}
+function profileComplete(user) { return !!(user && user.first_name && user.last_name && user.phone); }
 
 if (tg) { tg.ready(); tg.expand(); }
 
@@ -45,6 +39,7 @@ async function loadInitialData() {
     if (tg && tg.initData) {
       state.user = await api('/api/profile/me');
       state.isAdmin = !!state.user.isAdmin;
+      await refreshMyActiveOrders();
     }
   } catch (e) { /* гость */ }
   await loadProducts();
@@ -57,9 +52,10 @@ async function loadOrders() {
   state.orders = effectiveAdmin() ? await api('/api/orders') : await api('/api/orders/my');
 }
 
-async function refreshProfile() {
-  state.user = await api('/api/profile/me');
-  state.isAdmin = !!state.user.isAdmin;
+async function refreshMyActiveOrders() {
+  if (!state.user) return;
+  const mine = await api('/api/orders/my');
+  state.myActiveOrdersCount = mine.filter(o => ['new', 'confirmed'].includes(o.status)).length;
 }
 
 // ---------- Рендер ----------
@@ -81,17 +77,16 @@ function renderTabbar() {
   const tabs = [
     { id: 'catalog', label: 'Каталог', icon: '🌿' },
     { id: 'cart', label: 'Корзина', icon: '🛒', badge: cartCount() },
-    { id: 'orders', label: 'Заказы', icon: '📦' },
-    { id: 'profile', label: 'Профиль', icon: '👤' },
   ];
+  if (!effectiveAdmin()) tabs.push({ id: 'orders', label: 'Заказы', icon: '📦' });
+  tabs.push({ id: 'profile', label: 'Профиль', icon: '👤' });
   if (effectiveAdmin()) tabs.push({ id: 'manage', label: 'Управление', icon: '⚙️' });
 
   return `
     <div class="tabbar">
       ${tabs.map(t => `
         <button class="tab ${state.view === t.id ? 'active' : ''}" data-tab="${t.id}" style="position:relative;">
-          <span>${t.icon}</span>
-          <span>${t.label}</span>
+          <span>${t.icon}</span><span>${t.label}</span>
           ${t.badge ? `<span class="dot"></span>` : ''}
         </button>
       `).join('')}
@@ -99,13 +94,11 @@ function renderTabbar() {
   `;
 }
 
-// ---------- Каталог: раздел -> подраздел -> товары ----------
+// ---------- Каталог ----------
 const SECTION_ORDER = ['БАДы', 'Спортпит'];
 const SECTION_EMOJI = { 'БАДы': '💊', 'Спортпит': '🥤' };
 
 function visibleProducts() {
-  // Гость/клиент видит только активные; в режиме "смотреть как клиент" тоже показываем только активные,
-  // хотя бэкенд как админу мог бы отдать всё — фильтруем на фронте, чтобы честно эмулировать вид покупателя.
   const all = state.products;
   return effectiveAdmin() ? all : all.filter(p => p.active);
 }
@@ -138,17 +131,13 @@ function renderCatalog() {
       <div class="back-row" data-action="back-to-sections">← Все разделы</div>
       <div class="subcat-list">
         <div class="subcat-item" data-cat="__all__">Все товары раздела <span class="count">${inSection.length}</span></div>
-        ${cats.map(c => `
-          <div class="subcat-item" data-cat="${c}">${c} <span class="count">${inSection.filter(p => p.category === c).length}</span></div>
-        `).join('')}
+        ${cats.map(c => `<div class="subcat-item" data-cat="${c}">${c} <span class="count">${inSection.filter(p => p.category === c).length}</span></div>`).join('')}
       </div>
     `;
   }
 
-  // products
   let list = products.filter(p => p.section === state.selectedSection);
   if (state.selectedSubcategory) list = list.filter(p => p.category === state.selectedSubcategory);
-
   if (state.sortBy === 'brand') list = [...list].sort((a, b) => (a.brand || '').localeCompare(b.brand || ''));
   else if (state.sortBy === 'price_asc') list = [...list].sort((a, b) => a.price - b.price);
   else if (state.sortBy === 'price_desc') list = [...list].sort((a, b) => b.price - a.price);
@@ -174,26 +163,76 @@ function renderProductCard(p) {
   const inactive = !p.active;
   const stockLabel = p.stock === 0
     ? '<div class="stock-out">Нет в наличии</div>'
-    : p.stock <= 5 ? `<div class="stock-low">Осталось ${p.stock} шт.</div>` : '';
+    : `<div class="${p.stock <= 5 ? 'stock-low' : ''}" style="font-size:11px;color:var(--ink-soft)">Осталось ${p.stock} шт.</div>`;
   return `
-    <div class="card" data-product-id="${p.id}" style="${inactive ? 'opacity:0.5' : ''}">
+    <div class="card" data-open-product="${p.id}" style="${inactive ? 'opacity:0.5' : ''}">
       <div class="img-ph">🌿</div>
       <div class="brand-tag">${p.brand || ''}</div>
       <div class="name">${p.name}</div>
       <div class="price-tag">${p.price} ₽</div>
       ${stockLabel}
-      <button class="btn btn-primary" data-action="add-to-cart" data-id="${p.id}" ${p.stock === 0 ? 'disabled' : ''}>В корзину</button>
+      <button class="btn btn-primary" data-action="quick-add" data-id="${p.id}" ${p.stock === 0 ? 'disabled' : ''}>В корзину</button>
     </div>
   `;
 }
 
-// ---------- Корзина / чекаут ----------
+// ---------- Модалка карточки товара ----------
+function openProductDetailModal(product) {
+  const inCart = state.cart[product.id] || 0;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  let qty = 1;
+
+  function draw() {
+    const maxReached = qty >= product.stock;
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        <div class="detail-img">🌿</div>
+        <div class="brand-tag">${product.brand || ''}</div>
+        <h3>${product.name}</h3>
+        <div class="eyebrow" style="margin:4px 0 10px">${product.section} · ${product.category}</div>
+        <p style="font-size:14px;color:var(--ink-soft);line-height:1.5">${product.description || ''}</p>
+        <div class="row-between" style="margin-top:14px">
+          <span class="price-tag">${product.price} ₽</span>
+          <span style="font-size:12px;color:var(--ink-soft)">${product.stock === 0 ? 'Нет в наличии' : `В наличии: ${product.stock} шт.`}</span>
+        </div>
+        ${inCart ? `<div style="text-align:center;font-size:12px;color:var(--ink-soft);margin-top:8px">Уже в корзине: ${inCart} шт.</div>` : ''}
+        ${product.stock > 0 ? `
+          <div class="qty-stepper">
+            <button id="pd-dec">−</button>
+            <span class="val" id="pd-qty">${qty}</span>
+            <button id="pd-inc" ${maxReached ? 'disabled' : ''}>+</button>
+          </div>
+          <button class="btn btn-primary btn-block" id="pd-add">Добавить в корзину</button>
+        ` : ''}
+        <button class="btn btn-ghost btn-block" id="pd-close" style="margin-top:8px">Закрыть</button>
+      </div>
+    `;
+    backdrop.querySelector('#pd-close').onclick = () => backdrop.remove();
+    if (product.stock > 0) {
+      backdrop.querySelector('#pd-dec').onclick = () => { if (qty > 1) { qty--; draw(); } };
+      backdrop.querySelector('#pd-inc').onclick = () => { if (qty < product.stock) { qty++; draw(); } };
+      backdrop.querySelector('#pd-add').onclick = () => {
+        state.cart[product.id] = Math.min((state.cart[product.id] || 0) + qty, product.stock);
+        saveCart();
+        backdrop.remove();
+        toast('Добавлено в корзину');
+        render();
+      };
+    }
+  }
+  draw();
+  document.body.appendChild(backdrop);
+}
+
+// ---------- Корзина ----------
 function renderCart() {
   const items = Object.entries(state.cart)
     .map(([id, qty]) => ({ product: state.products.find(p => p.id === Number(id)), qty }))
     .filter(i => i.product);
   const total = items.reduce((sum, i) => sum + i.product.price * i.qty, 0);
   const complete = profileComplete(state.user);
+  const limitReached = state.myActiveOrdersCount >= 3;
 
   return `
     <div class="topbar"><div><div class="eyebrow">Оформление</div><h1>Корзина</h1></div></div>
@@ -202,14 +241,17 @@ function renderCart() {
         <div class="list-item">
           ${items.map(i => `
             <div class="cart-line">
-              <div>
-                <div style="font-weight:600;font-size:14px">${i.product.name}</div>
-                <div class="price-tag" style="margin-top:4px">${i.product.price} ₽</div>
+              <div class="cart-line-thumb">
+                <div class="thumb">🌿</div>
+                <div>
+                  <div style="font-weight:600;font-size:14px">${i.product.name}</div>
+                  <div class="price-tag" style="margin-top:4px">${i.product.price} ₽</div>
+                </div>
               </div>
               <div class="qty-control">
                 <button data-action="dec" data-id="${i.product.id}">−</button>
                 <span>${i.qty}</span>
-                <button data-action="inc" data-id="${i.product.id}">+</button>
+                <button data-action="inc" data-id="${i.product.id}" ${i.qty >= i.product.stock ? 'disabled' : ''}>+</button>
               </div>
             </div>
           `).join('')}
@@ -220,10 +262,11 @@ function renderCart() {
         </div>
 
         ${!state.user ? `<div class="empty-state"><h3>Нужен вход через Telegram</h3></div>` :
+          limitReached ? `
+            <div class="limit-banner">У вас уже 3 активных заказа — это максимум одновременно. Дождитесь выполнения или отмените один из текущих заказов во вкладке «Заказы», прежде чем оформить новый.</div>
+          ` :
           !complete ? `
-            <div class="profile-incomplete">
-              Перед оформлением заказа заполните, пожалуйста, имя, фамилию и телефон в профиле — дальше при каждом новом заказе указывать их снова не нужно.
-            </div>
+            <div class="profile-incomplete">Перед оформлением заказа заполните имя, фамилию и телефон в профиле — дальше указывать их снова не нужно.</div>
             <button class="btn btn-primary btn-block" data-action="go-to-profile">Заполнить профиль</button>
           ` : `
             <div class="checkout-readonly">
@@ -246,35 +289,155 @@ function renderCart() {
   `;
 }
 
-// ---------- Заказы ----------
+// ---------- Заказы (для покупателя) ----------
 function renderOrders() {
-  const statusLabels = { new: 'Новый', confirmed: 'Подтверждён', done: 'Выполнен', cancelled: 'Отменён' };
   return `
-    <div class="topbar"><div><div class="eyebrow">${effectiveAdmin() ? 'Все заказы' : 'Мои заказы'}</div><h1>Заказы</h1></div></div>
+    <div class="topbar"><div><div class="eyebrow">Мои заказы</div><h1>Заказы</h1></div></div>
     <div class="section">
       ${!state.user ? `<div class="empty-state"><h3>Нужен вход через Telegram</h3></div>` :
         state.orders.length === 0 ? `<div class="empty-state"><h3>Заказов пока нет</h3></div>` :
         state.orders.map(o => `
-          <div class="list-item">
+          <div class="list-item order-card" data-open-order="${o.id}">
             <div class="row-between">
-              <strong>Заказ #${o.id}</strong>
-              <span class="status-badge status-${o.status}">${statusLabels[o.status]}</span>
+              <strong>Заказ №${o.id}</strong>
+              <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
             </div>
-            ${effectiveAdmin() ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'}</div>` : ''}
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <div class="row-between">
-              <span class="price-tag">${o.total} ₽</span>
-              ${effectiveAdmin() ? `
-                <select data-action="change-status" data-id="${o.id}" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line)">
-                  ${Object.entries(statusLabels).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}
-                </select>
-              ` : ''}
-            </div>
+            <div class="row-between"><span class="price-tag">${o.total} ₽</span></div>
           </div>
         `).join('')
       }
     </div>
   `;
+}
+
+function orderDetailHtml(o, { editable }) {
+  return `
+    <h3>Заказ №${o.id}</h3>
+    <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
+    <div class="list-item" style="margin-top:14px">
+      ${o.items.map(i => `
+        <div class="cart-line-thumb" style="padding:8px 0;border-bottom:1px solid var(--line)">
+          <div class="thumb">🌿</div>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:14px">${i.name}</div>
+            <div style="font-size:12px;color:var(--ink-soft)">${i.qty} × ${i.price} ₽</div>
+          </div>
+          <div class="price-tag">${i.qty * i.price} ₽</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${o.total} ₽</span></div>
+    <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${o.address || '—'}</div></div>
+    ${o.comment ? `<div class="field"><label>Комментарий</label><div style="font-size:14px">${o.comment}</div></div>` : ''}
+  `;
+}
+
+function openOrderDetailModal(order) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+
+  function drawView() {
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        ${orderDetailHtml(order, {})}
+        ${order.status === 'new' ? `
+          <div class="order-actions">
+            <button class="btn btn-ghost" id="od-edit">Редактировать</button>
+            <button class="btn btn-danger" id="od-cancel">Удалить заказ</button>
+          </div>
+        ` : ''}
+        <button class="btn btn-primary btn-block" id="od-close" style="margin-top:10px">Закрыть</button>
+      </div>
+    `;
+    backdrop.querySelector('#od-close').onclick = () => backdrop.remove();
+    if (order.status === 'new') {
+      backdrop.querySelector('#od-edit').onclick = () => drawEdit();
+      backdrop.querySelector('#od-cancel').onclick = async () => {
+        if (!confirm('Удалить этот заказ?')) return;
+        try {
+          await api(`/api/orders/${order.id}`, { method: 'DELETE' });
+          backdrop.remove();
+          toast('Заказ удалён');
+          await loadOrders();
+          await refreshMyActiveOrders();
+          render();
+        } catch (e) { toast('Не удалось удалить заказ'); }
+      };
+    }
+  }
+
+  function drawEdit() {
+    const editItems = order.items.map(i => ({ ...i }));
+    function total() { return editItems.reduce((s, i) => s + i.price * i.qty, 0); }
+
+    function drawEditInner() {
+      backdrop.innerHTML = `
+        <div class="modal-sheet">
+          <h3>Редактировать заказ №${order.id}</h3>
+          <div class="list-item" style="margin-top:10px">
+            ${editItems.map((i, idx) => {
+              const product = state.products.find(p => p.id === i.product_id);
+              const maxQty = product ? product.stock : i.qty;
+              return `
+                <div class="cart-line-thumb" style="padding:8px 0;border-bottom:1px solid var(--line)">
+                  <div class="thumb">🌿</div>
+                  <div style="flex:1">
+                    <div style="font-weight:600;font-size:14px">${i.name}</div>
+                    <div style="font-size:12px;color:var(--ink-soft)">${i.price} ₽ / шт.</div>
+                  </div>
+                  <div class="qty-control">
+                    <button data-edit-dec="${idx}">−</button>
+                    <span>${i.qty}</span>
+                    <button data-edit-inc="${idx}" ${i.qty >= maxQty ? 'disabled' : ''}>+</button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${total()} ₽</span></div>
+          <div class="field"><label>Адрес доставки</label><textarea id="oe-address">${order.address || ''}</textarea></div>
+          <div class="field"><label>Комментарий</label><textarea id="oe-comment">${order.comment || ''}</textarea></div>
+          <button class="btn btn-primary btn-block" id="oe-save">Сохранить изменения</button>
+          <button class="btn btn-ghost btn-block" id="oe-cancel" style="margin-top:8px">Отмена</button>
+        </div>
+      `;
+      backdrop.querySelectorAll('[data-edit-dec]').forEach(btn => {
+        btn.onclick = () => {
+          const idx = Number(btn.dataset.editDec);
+          if (editItems[idx].qty > 1) { editItems[idx].qty--; drawEditInner(); }
+        };
+      });
+      backdrop.querySelectorAll('[data-edit-inc]').forEach(btn => {
+        btn.onclick = () => {
+          const idx = Number(btn.dataset.editInc);
+          const product = state.products.find(p => p.id === editItems[idx].product_id);
+          if (!product || editItems[idx].qty < product.stock) { editItems[idx].qty++; drawEditInner(); }
+        };
+      });
+      backdrop.querySelector('#oe-cancel').onclick = () => drawView();
+      backdrop.querySelector('#oe-save').onclick = async () => {
+        const address = document.getElementById('oe-address').value.trim();
+        const comment = document.getElementById('oe-comment').value.trim();
+        if (!address) { toast('Укажите адрес доставки'); return; }
+        try {
+          const updated = await api(`/api/orders/${order.id}`, {
+            method: 'PUT',
+            body: { items: editItems.map(i => ({ product_id: i.product_id, qty: i.qty })), address, comment }
+          });
+          Object.assign(order, updated);
+          backdrop.remove();
+          toast('Заказ обновлён');
+          await loadOrders();
+          render();
+        } catch (e) { toast('Не удалось сохранить изменения'); }
+      };
+    }
+    drawEditInner();
+  }
+
+  drawView();
+  document.body.appendChild(backdrop);
 }
 
 // ---------- Профиль ----------
@@ -290,15 +453,14 @@ function renderProfile() {
 
   return `
     <div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div>
-    <div class="section">
-      <div class="profile-card">
-        <div class="avatar">${initial}</div>
-        <div>
-          <div class="pname">${state.user.first_name || 'Без имени'} ${state.user.last_name || ''}</div>
-          <div class="puser">@${state.user.username || 'без username'}</div>
-        </div>
+    <div class="profile-header">
+      <div class="profile-header-inner">
+        <div class="avatar-lg">${initial}</div>
+        <div class="pname">${state.user.first_name || 'Без имени'} ${state.user.last_name || ''}</div>
       </div>
-
+      <button class="settings-gear" data-action="open-settings">⚙️</button>
+    </div>
+    <div class="section">
       ${state.isAdmin ? `
         <div class="mode-toggle">
           <div>
@@ -310,29 +472,71 @@ function renderProfile() {
           </button>
         </div>
       ` : ''}
-
       <div class="stats-row">
         <div class="stat-box"><div class="num">${stats.ordersCount}</div><div class="lbl">Заказов сделано</div></div>
         <div class="stat-box"><div class="num">${stats.totalSpent} ₽</div><div class="lbl">Всего потрачено</div></div>
       </div>
-
-      ${!profileComplete(state.user) ? `<div class="profile-incomplete">Заполните имя, фамилию и телефон — это нужно один раз, дальше при заказе останется указать только адрес.</div>` : ''}
-
-      <div class="field"><label>Имя</label><input id="profile-first-name" value="${state.user.first_name || ''}" placeholder="Имя" /></div>
-      <div class="field"><label>Фамилия</label><input id="profile-last-name" value="${state.user.last_name || ''}" placeholder="Фамилия" /></div>
-      <div class="field"><label>Телефон</label><input id="profile-phone" type="tel" value="${state.user.phone || ''}" placeholder="+7 900 000-00-00" /></div>
-      <div class="field"><label>Адрес по умолчанию</label><textarea id="profile-address" placeholder="Необязательно, можно указать прямо при заказе">${state.user.address || ''}</textarea></div>
-      <button class="btn btn-primary btn-block" data-action="save-profile">Сохранить</button>
+      ${!profileComplete(state.user) ? `<div class="profile-incomplete">Заполните имя, фамилию и телефон в настройках (⚙️ вверху) — это нужно один раз.</div>` : ''}
     </div>
   `;
 }
 
+function openSettingsModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const u = state.user;
+  const cooldown = db_checkCooldownClientSide(u);
+
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>Настройки профиля</h3>
+      <div class="field"><label>Имя</label><input id="s-first-name" value="${u.first_name || ''}" /></div>
+      <div class="field"><label>Фамилия</label><input id="s-last-name" value="${u.last_name || ''}" /></div>
+      <div class="field"><label>Телефон</label><input id="s-phone" type="tel" value="${u.phone || ''}" placeholder="+7 900 000-00-00" /></div>
+      <div class="field">
+        <label>Дата рождения</label>
+        <input id="s-birth" type="date" value="${u.birth_date || ''}" ${cooldown.blocked ? 'disabled' : ''} />
+        ${cooldown.blocked ? `<div style="font-size:11px;color:var(--amber-dark);margin-top:4px">Дату рождения можно менять раз в 6 месяцев. Следующее изменение будет доступно ${cooldown.nextDateStr}.</div>` : ''}
+      </div>
+      <button class="btn btn-primary btn-block" id="s-save">Сохранить</button>
+      <button class="btn btn-ghost btn-block" id="s-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('#s-cancel').onclick = () => backdrop.remove();
+  backdrop.querySelector('#s-save').onclick = async () => {
+    const first_name = document.getElementById('s-first-name').value.trim();
+    const last_name = document.getElementById('s-last-name').value.trim();
+    const phone = document.getElementById('s-phone').value.trim();
+    const birthInput = document.getElementById('s-birth');
+    const birth_date = birthInput.disabled ? u.birth_date : birthInput.value;
+    if (!first_name || !last_name || !phone) { toast('Заполните имя, фамилию и телефон'); return; }
+    try {
+      state.user = await api('/api/profile/me', { method: 'PUT', body: { first_name, last_name, phone, birth_date } });
+      backdrop.remove();
+      toast('Профиль обновлён');
+      render();
+    } catch (e) {
+      toast('Дату рождения пока менять нельзя (раз в 6 месяцев)');
+    }
+  };
+}
+
+// Проверка cooldown на фронте — только для UI-подсказки, реальная проверка всегда на сервере
+function db_checkCooldownClientSide(u) {
+  if (!u.birth_date_updated_at) return { blocked: false };
+  const last = new Date(u.birth_date_updated_at);
+  const nextAllowed = new Date(last);
+  nextAllowed.setMonth(nextAllowed.getMonth() + 6);
+  if (new Date() < nextAllowed) {
+    return { blocked: true, nextDateStr: nextAllowed.toLocaleDateString('ru-RU') };
+  }
+  return { blocked: false };
+}
+
 // ---------- Управление (админ) ----------
 function renderManage() {
-  const tabs = [
-    { id: 'products', label: 'Товары' },
-    { id: 'orders', label: 'Заказы' },
-  ];
+  const tabs = [{ id: 'products', label: 'Товары' }, { id: 'orders', label: 'Заказы' }];
   return `
     <div class="topbar"><div><div class="eyebrow">Админ-панель</div><h1>Управление</h1></div></div>
     <div class="manage-pills">
@@ -368,22 +572,21 @@ function renderManageProducts() {
 }
 
 function renderManageOrders() {
-  const statusLabels = { new: 'Новый', confirmed: 'Подтверждён', done: 'Выполнен', cancelled: 'Отменён' };
   return `
     <div class="section">
       ${state.orders.length === 0 ? `<div class="empty-state"><h3>Заказов пока нет</h3></div>` :
         state.orders.map(o => `
-          <div class="list-item">
+          <div class="list-item order-card" data-open-order="${o.id}">
             <div class="row-between">
-              <strong>Заказ #${o.id}</strong>
-              <span class="status-badge status-${o.status}">${statusLabels[o.status]}</span>
+              <strong>Заказ №${o.id}</strong>
+              <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
             </div>
             <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'}</div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
             <div class="row-between">
               <span class="price-tag">${o.total} ₽</span>
-              <select data-action="change-status" data-id="${o.id}" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line)">
-                ${Object.entries(statusLabels).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}
+              <select data-action="change-status" data-id="${o.id}" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line)" onclick="event.stopPropagation()">
+                ${Object.entries(STATUS_LABELS).map(([k, v]) => `<option value="${k}" ${o.status === k ? 'selected' : ''}>${v}</option>`).join('')}
               </select>
             </div>
           </div>
@@ -393,7 +596,7 @@ function renderManageOrders() {
   `;
 }
 
-// ---------- Модалка товара ----------
+// ---------- Модалка товара (админ) ----------
 function openProductModal(product) {
   const isEdit = !!product;
   const sections = [...new Set(state.products.map(p => p.section).filter(Boolean))];
@@ -483,11 +686,11 @@ function attachEvents() {
       state.view = btn.dataset.tab;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; }
       if ((state.view === 'orders' || state.view === 'manage') && state.user) await loadOrders();
+      if (state.view === 'cart' && state.user) await refreshMyActiveOrders();
       render();
     };
   });
 
-  // Каталог: навигация
   app.querySelectorAll('[data-section]').forEach(tile => {
     tile.onclick = () => { state.selectedSection = tile.dataset.section; state.catalogStep = 'subcategories'; render(); };
   });
@@ -506,31 +709,46 @@ function attachEvents() {
   const sortSelect = app.querySelector('[data-action="sort-select"]');
   if (sortSelect) sortSelect.onchange = () => { state.sortBy = sortSelect.value; render(); };
 
-  // Корзина
-  app.querySelectorAll('[data-action="add-to-cart"]').forEach(btn => {
-    btn.onclick = () => {
-      const id = Number(btn.dataset.id);
-      state.cart[id] = (state.cart[id] || 0) + 1;
+  // Открытие карточки товара (клик по карточке, не по кнопке)
+  app.querySelectorAll('[data-open-product]').forEach(card => {
+    card.onclick = () => {
+      const product = state.products.find(p => p.id === Number(card.dataset.openProduct));
+      if (product) openProductDetailModal(product);
+    };
+  });
+  app.querySelectorAll('[data-action="quick-add"]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const product = state.products.find(p => p.id === Number(btn.dataset.id));
+      const current = state.cart[product.id] || 0;
+      if (current >= product.stock) { toast('Достигнут максимум остатка'); return; }
+      state.cart[product.id] = current + 1;
       saveCart();
       toast('Добавлено в корзину');
       render();
     };
   });
+
+  // Корзина
   app.querySelectorAll('[data-action="inc"]').forEach(btn => {
-    btn.onclick = () => { const id = btn.dataset.id; state.cart[id] = (state.cart[id] || 0) + 1; saveCart(); render(); };
+    btn.onclick = () => {
+      const id = btn.dataset.id;
+      const product = state.products.find(p => p.id === Number(id));
+      if ((state.cart[id] || 0) >= product.stock) { toast('Достигнут максимум остатка'); return; }
+      state.cart[id] = (state.cart[id] || 0) + 1;
+      saveCart(); render();
+    };
   });
   app.querySelectorAll('[data-action="dec"]').forEach(btn => {
     btn.onclick = () => {
       const id = btn.dataset.id;
       state.cart[id] = (state.cart[id] || 0) - 1;
       if (state.cart[id] <= 0) delete state.cart[id];
-      saveCart();
-      render();
+      saveCart(); render();
     };
   });
 
-  const goProfileLinks = app.querySelectorAll('[data-action="go-to-profile"]');
-  goProfileLinks.forEach(el => {
+  app.querySelectorAll('[data-action="go-to-profile"]').forEach(el => {
     el.onclick = (e) => { e.preventDefault(); state.view = 'profile'; render(); };
   });
 
@@ -548,28 +766,31 @@ function attachEvents() {
         toast('Заказ оформлен!');
         state.view = 'orders';
         await loadOrders();
+        await refreshMyActiveOrders();
         render();
-      } catch (e) { toast('Не удалось оформить заказ'); }
+      } catch (e) {
+        if (e.message === 'too_many_active_orders') toast('Максимум 3 активных заказа одновременно');
+        else if (e.message === 'insufficient_stock') toast('Одного из товаров не хватает на складе');
+        else toast('Не удалось оформить заказ');
+      }
     };
   }
 
-  // Профиль
-  const saveProfileBtn = app.querySelector('[data-action="save-profile"]');
-  if (saveProfileBtn) {
-    saveProfileBtn.onclick = async () => {
-      const first_name = document.getElementById('profile-first-name').value.trim();
-      const last_name = document.getElementById('profile-last-name').value.trim();
-      const phone = document.getElementById('profile-phone').value.trim();
-      const address = document.getElementById('profile-address').value.trim();
-      if (!first_name || !last_name || !phone) { toast('Заполните имя, фамилию и телефон'); return; }
-      state.user = await api('/api/profile/me', { method: 'PUT', body: { first_name, last_name, phone, address } });
-      toast('Профиль обновлён');
-      render();
+  // Заказы (покупатель)
+  app.querySelectorAll('[data-open-order]').forEach(card => {
+    card.onclick = () => {
+      const order = state.orders.find(o => o.id === Number(card.dataset.openOrder));
+      if (order) openOrderDetailModal(order);
     };
-  }
+  });
+
+  // Профиль
+  const gearBtn = app.querySelector('[data-action="open-settings"]');
+  if (gearBtn) gearBtn.onclick = () => openSettingsModal();
+
   const toggleModeBtn = app.querySelector('[data-action="toggle-view-mode"]');
   if (toggleModeBtn) {
-    toggleModeBtn.onclick = async () => {
+    toggleModeBtn.onclick = () => {
       state.viewAsClient = !state.viewAsClient;
       state.view = 'catalog';
       state.catalogStep = 'sections';
@@ -578,7 +799,7 @@ function attachEvents() {
     };
   }
 
-  // Заказы: смена статуса
+  // Смена статуса заказа (админ)
   app.querySelectorAll('[data-action="change-status"]').forEach(sel => {
     sel.onchange = async () => {
       await api(`/api/orders/${sel.dataset.id}/status`, { method: 'PUT', body: { status: sel.value } });
