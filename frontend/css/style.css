@@ -283,3 +283,185 @@ h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 600; margin: 0; }
   font-size: 13px;
   z-index: 60;
 }
+
+/* ---- Разделы каталога (верхний уровень: БАДы / Спортпит) ---- */
+.section-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 4px 16px 16px;
+}
+.section-tile {
+  background: linear-gradient(160deg, var(--forest), var(--forest-dark));
+  color: #fff;
+  border-radius: 18px;
+  padding: 22px 16px;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.section-tile .emoji { font-size: 26px; }
+.section-tile .name { font-family: 'Fraunces', serif; font-size: 18px; font-weight: 600; }
+.section-tile .count { font-size: 12px; opacity: 0.8; }
+
+.back-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 8px;
+  color: var(--forest-dark);
+  font-size: 14px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.subcat-list { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 8px; }
+.subcat-item {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.subcat-item .count { font-weight: 400; color: var(--ink-soft); font-size: 12px; }
+
+.sort-row {
+  padding: 0 16px 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+.sort-row select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  background: var(--surface);
+}
+
+.brand-tag { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.03em; }
+
+/* ---- Профиль ---- */
+.profile-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.avatar {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: var(--forest);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Fraunces', serif;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.profile-card .pname { font-weight: 600; font-size: 16px; }
+.profile-card .puser { font-size: 12px; color: var(--ink-soft); }
+
+.stats-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.stat-box {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  text-align: center;
+}
+.stat-box .num { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 500; color: var(--forest-dark); }
+.stat-box .lbl { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--sage);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.mode-toggle .txt { font-size: 13px; font-weight: 600; color: var(--forest-dark); }
+.mode-toggle .sub { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+.checkout-readonly {
+  background: var(--sage);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.checkout-readonly a { color: var(--forest-dark); font-weight: 600; text-decoration: underline; font-size: 12px; }
+
+.profile-incomplete {
+  background: #FBF1DC;
+  border: 1px solid #EAD8AE;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 13px;
+  margin-bottom: 14px;
+  color: var(--amber-dark);
+}
+
+/* ---- Управление ---- */
+.manage-pills { display: flex; gap: 8px; padding: 0 16px 14px; }
+.manage-pill {
+  flex: 1;
+  text-align: center;
+  padding: 9px 0;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.manage-pill.active { background: var(--forest); color: #fff; border-color: var(--forest); }
+
+.manage-group-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  padding: 14px 16px 6px;
+}
+
+.manage-row {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  margin: 0 16px 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.manage-row .info { flex: 1; min-width: 0; }
+.manage-row .info .n { font-size: 14px; font-weight: 600; }
+.manage-row .info .m { font-size: 12px; color: var(--ink-soft); }
+.manage-row .acts { display: flex; gap: 6px; flex-shrink: 0; }
+
