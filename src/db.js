@@ -381,6 +381,7 @@ function getShopStats() {
 }
 
 module.exports = {
+  DATA_DIR,
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown,
   getProducts, getProduct, createProduct, updateProduct, hideProduct, deleteProductHard,
   addStock, removeStock, sanitizeProduct, nearestExpiry,

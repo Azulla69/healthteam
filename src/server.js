@@ -26,6 +26,9 @@ app.use('/api/stats', statsRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
+// Отдаём загруженные фото товаров (хранятся на подключённом Volume вместе с data.json)
+const db = require('./db');
+app.use('/uploads', express.static(path.join(db.DATA_DIR, 'uploads')));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 

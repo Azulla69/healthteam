@@ -38,6 +38,13 @@ function toast(msg) {
 function profileComplete(user) { return !!(user && user.first_name && user.last_name && user.phone); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('ru-RU') : '—'; }
 
+// Показывает реальное фото товара, если оно загружено, иначе — плейсхолдер с эмодзи
+function thumbHtml(imageUrl, className, emoji = '🌿') {
+  return imageUrl
+    ? `<img src="${imageUrl}" class="${className}" alt="">`
+    : `<div class="${className}">${emoji}</div>`;
+}
+
 if (tg) { tg.ready(); tg.expand(); }
 
 // ---------- Загрузка данных ----------
@@ -172,7 +179,7 @@ function renderProductCard(p) {
     : `<div class="${p.stock <= 5 ? 'stock-low' : ''}" style="font-size:11px;color:var(--ink-soft)">Осталось ${p.stock} шт.</div>`;
   return `
     <div class="card" data-open-product="${p.id}" style="${inactive ? 'opacity:0.5' : ''}">
-      <div class="img-ph">🌿</div>
+      ${thumbHtml(p.image_url, 'img-ph')}
       <div class="brand-tag">${p.brand || ''}</div>
       <div class="name">${p.name}</div>
       <div class="price-tag">${p.price} ₽</div>
@@ -192,7 +199,7 @@ function openProductDetailModal(product) {
     const maxReached = qty >= product.stock;
     backdrop.innerHTML = `
       <div class="modal-sheet">
-        <div class="detail-img">🌿</div>
+        ${thumbHtml(product.image_url, 'detail-img')}
         <div class="brand-tag">${product.brand || ''}</div>
         <h3>${product.name}</h3>
         <div class="eyebrow" style="margin:4px 0 10px">${product.section} · ${product.category}</div>
@@ -247,7 +254,7 @@ function renderCart() {
           ${items.map(i => `
             <div class="cart-line">
               <div class="cart-line-thumb">
-                <div class="thumb">🌿</div>
+                ${thumbHtml(i.product.image_url, 'thumb')}
                 <div>
                   <div style="font-weight:600;font-size:14px">${i.product.name}</div>
                   <div class="price-tag" style="margin-top:4px">${i.product.price} ₽</div>
@@ -310,16 +317,18 @@ function renderOrders() {
 function orderItemsHtml(o) {
   return `
     <div class="list-item" style="margin-top:14px">
-      ${o.items.map(i => `
+      ${o.items.map(i => {
+        const product = state.products.find(p => p.id === i.product_id);
+        return `
         <div class="cart-line-thumb" style="padding:8px 0;border-bottom:1px solid var(--line)">
-          <div class="thumb">🌿</div>
+          ${thumbHtml(product?.image_url, 'thumb')}
           <div style="flex:1">
             <div style="font-weight:600;font-size:14px">${i.name}</div>
             <div style="font-size:12px;color:var(--ink-soft)">${i.qty} × ${i.price} ₽</div>
           </div>
           <div class="price-tag">${i.qty * i.price} ₽</div>
         </div>
-      `).join('')}
+      `;}).join('')}
     </div>
   `;
 }
@@ -376,7 +385,7 @@ function openOrderDetailModal(order) {
               const maxQty = product ? product.stock : i.qty;
               return `
                 <div class="cart-line-thumb" style="padding:8px 0;border-bottom:1px solid var(--line)">
-                  <div class="thumb">🌿</div>
+                  ${thumbHtml(product?.image_url, 'thumb')}
                   <div style="flex:1">
                     <div style="font-weight:600;font-size:14px">${i.name}</div>
                     <div style="font-size:12px;color:var(--ink-soft)">${i.price} ₽ / шт.</div>
@@ -565,6 +574,7 @@ function renderManageCatalog() {
         <div class="manage-group-title">${sec}</div>
         ${items.map(p => `
           <div class="manage-row" data-open-manage-product="${p.id}" style="${p.active ? '' : 'opacity:0.5'}">
+            ${thumbHtml(p.image_url, 'thumb')}
             <div class="info">
               <div class="n">${p.name}</div>
               <div class="m">${p.brand || '—'} · ост. ${p.stock} шт.</div>
@@ -841,6 +851,16 @@ function openProductModal(product) {
   backdrop.innerHTML = `
     <div class="modal-sheet">
       <h3>${isEdit ? 'Редактировать товар' : 'Новый товар'}</h3>
+      ${isEdit ? `
+        <div class="image-upload-row">
+          <div id="pf-image-preview">${product.image_url ? `<img src="${product.image_url}" class="image-upload-preview" alt="">` : `<div class="image-upload-ph">🌿</div>`}</div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+            <button type="button" class="btn btn-ghost" id="pf-upload-btn" style="font-size:13px">Загрузить фото</button>
+            ${product.image_url ? `<button type="button" class="btn btn-ghost" id="pf-remove-image" style="font-size:13px;color:var(--danger)">Удалить фото</button>` : ''}
+            <input type="file" id="pf-image-file" accept="image/*" style="display:none" />
+          </div>
+        </div>
+      ` : `<div class="field"><label>Фото</label><div style="font-size:13px;color:var(--ink-soft)">Фото можно будет загрузить после создания товара — откройте его в «Список товаров»</div></div>`}
       <div class="field"><label>Название</label><input id="pf-name" value="${product?.name || ''}" /></div>
       <div class="field">
         <label>Производитель</label>
@@ -875,6 +895,36 @@ function openProductModal(product) {
     </div>
   `;
   document.body.appendChild(backdrop);
+
+  if (isEdit) {
+    const uploadBtn = backdrop.querySelector('#pf-upload-btn');
+    const fileInput = backdrop.querySelector('#pf-image-file');
+    uploadBtn.onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      try {
+        const updated = await apiUploadFile(`/api/catalog/${product.id}/image`, file);
+        product.image_url = updated.image_url;
+        toast('Фото загружено');
+        await loadProducts();
+        backdrop.remove();
+        openProductModal(state.products.find(p => p.id === product.id));
+      } catch (e) { toast('Не удалось загрузить фото (проверьте формат и размер до 5МБ)'); }
+    };
+    const removeImageBtn = backdrop.querySelector('#pf-remove-image');
+    if (removeImageBtn) {
+      removeImageBtn.onclick = async () => {
+        try {
+          await api(`/api/catalog/${product.id}/image`, { method: 'DELETE' });
+          toast('Фото удалено');
+          await loadProducts();
+          backdrop.remove();
+          openProductModal(state.products.find(p => p.id === product.id));
+        } catch (e) { toast('Не удалось удалить фото'); }
+      };
+    }
+  }
 
   backdrop.querySelector('#pf-cancel').onclick = () => backdrop.remove();
   backdrop.querySelector('#pf-save').onclick = async () => {
