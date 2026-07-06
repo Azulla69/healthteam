@@ -1,7 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const DB_FILE = path.join(__dirname, '..', 'data.json');
+// DATA_DIR можно задать через переменную окружения — например, путь монтирования Railway Volume.
+// Если не задана, используется папка проекта (подходит для локальной разработки).
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_FILE = path.join(DATA_DIR, 'data.json');
 const MAX_ACTIVE_ORDERS = 3;
 const BIRTHDATE_COOLDOWN_MONTHS = 6;
 const ACTIVE_STATUSES = ['processing', 'delivering'];
