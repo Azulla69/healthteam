@@ -36,10 +36,13 @@ app.get('/api/config', (req, res) => {
   res.json({ botUsername: process.env.BOT_USERNAME || '', deliveryTiers: db.DELIVERY_TIERS });
 });
 
+const { startBot } = require('./bot');
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   if (!process.env.BOT_TOKEN || process.env.BOT_TOKEN.includes('Example')) {
     console.warn('⚠️  BOT_TOKEN не настроен в .env — авторизация через Telegram работать не будет');
   }
+  startBot();
 });
