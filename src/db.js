@@ -24,6 +24,8 @@ const REFERRAL_LADDER = [
   { count: 10, bonus: 1000 }, { count: 20, bonus: 2000 }
 ];
 const BIRTHDAY_DISCOUNT_RATE = 0.15;
+const CONSULTANT_DISCOUNT_RATE = 0.10;
+const CONSULTANT_SESSION_TTL_HOURS = 24;
 const BIRTHDAY_WINDOW_DAYS = 7;
 const MAX_BONUS_PAYMENT_SHARE = 0.5;
 const SIGNUP_BONUS = 100;
@@ -79,8 +81,8 @@ function seedProducts() {
 function loadDefault() {
   const products = seedProducts();
   return {
-    users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [],
-    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1 }
+    users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [], consultant_sessions: [],
+    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1 }
   };
 }
 
@@ -89,9 +91,11 @@ if (fs.existsSync(DB_FILE)) {
   data = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
   if (!data.ledger) data.ledger = [];
   if (!data.bonus_tx) data.bonus_tx = [];
+  if (!data.consultant_sessions) data.consultant_sessions = [];
   if (!data.seq.ledger) data.seq.ledger = 1;
   if (!data.seq.batches) data.seq.batches = 1;
   if (!data.seq.bonus_tx) data.seq.bonus_tx = 1;
+  if (!data.seq.consultant_sessions) data.seq.consultant_sessions = 1;
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
@@ -308,7 +312,7 @@ function countActiveOrders(user_id) {
   return data.orders.filter(o => o.user_id === user_id && ACTIVE_STATUSES.includes(o.status)).length;
 }
 
-function createOrder({ user_id, items, comment, phone, address, use_bonus, use_birthday_discount }) {
+function createOrder({ user_id, items, comment, phone, address, use_bonus, use_birthday_discount, use_consultant_discount }) {
   if (countActiveOrders(user_id) >= MAX_ACTIVE_ORDERS) return { error: 'too_many_active_orders', limit: MAX_ACTIVE_ORDERS };
   const resolved = resolveItems(items);
   if (resolved.error) return resolved;
@@ -318,6 +322,9 @@ function createOrder({ user_id, items, comment, phone, address, use_bonus, use_b
   let total = resolved.total;
   let birthdayDiscountAmount = 0;
   let birthdayApplied = false;
+  let consultantDiscountAmount = 0;
+  let consultantApplied = false;
+  let consultantSessionToMark = null;
 
   if (use_birthday_discount && user) {
     const bd = getBirthdayDiscountInfo(user);
@@ -325,6 +332,16 @@ function createOrder({ user_id, items, comment, phone, address, use_bonus, use_b
       birthdayDiscountAmount = Math.round(total * BIRTHDAY_DISCOUNT_RATE);
       total -= birthdayDiscountAmount;
       birthdayApplied = true;
+    }
+  }
+  // Скидки не суммируются — если ДР уже применена, скидку консультанта не даём
+  if (!birthdayApplied && use_consultant_discount && user) {
+    const session = findValidConsultantSession(user_id, resolved.resolvedItems.map(i => i.product_id));
+    if (session) {
+      consultantDiscountAmount = Math.round(total * CONSULTANT_DISCOUNT_RATE);
+      total -= consultantDiscountAmount;
+      consultantApplied = true;
+      consultantSessionToMark = session.id;
     }
   }
 
@@ -344,6 +361,7 @@ function createOrder({ user_id, items, comment, phone, address, use_bonus, use_b
   const order = {
     id: nextId('orders'), user_id, status: 'processing', paid: false,
     total: resolved.total, birthday_discount_applied: birthdayApplied, birthday_discount_amount: birthdayDiscountAmount,
+    consultant_discount_applied: consultantApplied, consultant_discount_amount: consultantDiscountAmount,
     bonus_redeemed: bonusRedeemed, delivery_cost: deliveryCost, paid_amount: paidAmount, payable_total: payableTotal,
     comment: comment || '', admin_comment: '',
     phone: phone || '', address: address || '', created_at: new Date().toISOString()
@@ -358,6 +376,7 @@ function createOrder({ user_id, items, comment, phone, address, use_bonus, use_b
     if (tx) tx.order_id = order.id;
   }
   if (birthdayApplied) user.birthday_discount_used_at = new Date().toISOString();
+  if (consultantSessionToMark) markConsultantSessionUsed(consultantSessionToMark);
 
   persist();
   return { order: { ...order, items: items_ } };
@@ -688,6 +707,32 @@ function getBirthdayDiscountInfo(user) {
   return { eligible: !alreadyUsed, rate: BIRTHDAY_DISCOUNT_RATE, windowEnd: window.end.toISOString() };
 }
 
+// ---------- Бот-консультант: сессия подбора и скидка 10% на набор ----------
+function createConsultantSession(user_id, product_ids) {
+  const session = {
+    id: nextId('consultant_sessions'), user_id, product_ids: [...new Set(product_ids.map(Number))],
+    created_at: new Date().toISOString(), used: false
+  };
+  data.consultant_sessions.push(session);
+  persist();
+  return session;
+}
+
+// Заказ имеет право на скидку, если есть недавняя неиспользованная сессия подбора,
+// и ВСЕ товары в заказе входят в рекомендованный набор из этой сессии
+function findValidConsultantSession(user_id, orderProductIds) {
+  const cutoff = new Date(Date.now() - CONSULTANT_SESSION_TTL_HOURS * 3600 * 1000);
+  const candidates = data.consultant_sessions
+    .filter(s => s.user_id === user_id && !s.used && new Date(s.created_at) > cutoff)
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  return candidates.find(s => orderProductIds.length > 0 && orderProductIds.every(id => s.product_ids.includes(id))) || null;
+}
+
+function markConsultantSessionUsed(id) {
+  const s = data.consultant_sessions.find(s => s.id === id);
+  if (s) { s.used = true; persist(); }
+}
+
 
 function getUserStats(user_id) {
   const orders = data.orders.filter(o => o.user_id === user_id && o.status !== 'cancelled');
@@ -760,5 +805,6 @@ module.exports = {
   addLedgerEntry, getLedger, deleteLedgerEntry, getBalance, getShopStats,
   getBonusInfo, getBonusBalance, getBonusHistory, redeemBonuses, TX_LABELS,
   getBirthdayDiscountInfo, REFERRAL_RATE, REFERRAL_QUALIFY_MIN, REFERRAL_LADDER, MAX_BONUS_PAYMENT_SHARE,
-  getDeliveryCost, DELIVERY_TIERS
+  getDeliveryCost, DELIVERY_TIERS,
+  createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE
 };

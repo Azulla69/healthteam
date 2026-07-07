@@ -12,6 +12,13 @@ const state = {
   bonusHistory: [],
   checkoutUseBonus: 0,
   checkoutUseBirthday: false,
+  checkoutUseConsultant: false,
+
+  consultantStep: 'intro',
+  consultantAnswers: {},
+  consultantProducts: [],
+  consultantSelected: {},
+  consultantEligibleIds: [], // товары из последней подборки — для показа чекбокса скидки в корзине
 
   catalogStep: 'sections',
   selectedSection: null,
@@ -197,15 +204,121 @@ function renderServices() {
   `;
 }
 
+// ================= БОТ-КОНСУЛЬТАНТ =================
+const CONSULTANT_ACTIVITY_OPTIONS = ['Сидячая офисная работа', 'Физическая работа', 'Тренируюсь в зале 3+ раз в неделю', 'Профессиональный спорт'];
+const CONSULTANT_GOAL_OPTIONS = ['Похудение', 'Набор мышечной массы', 'Поддержание формы и здоровье', 'Выносливость и энергия'];
+
+function getConsultantTags(answers) {
+  const tags = [];
+  const h = Number(answers.height), w = Number(answers.weight);
+  const bmi = h > 0 ? w / Math.pow(h / 100, 2) : 22;
+
+  if (answers.goal === 'Похудение' || bmi >= 27) tags.push('жиросжигател');
+  if (answers.goal === 'Набор мышечной массы' || bmi < 18.5) { tags.push('гейнер'); tags.push('масс'); }
+  if (answers.goal === 'Выносливость и энергия') { tags.push('энергетик'); tags.push('кофеин'); tags.push('предтренир'); }
+  if (answers.goal === 'Поддержание формы и здоровье') { tags.push('омега'); }
+  if (answers.activity === 'Сидячая офисная работа') tags.push('коллаген');
+  if (answers.activity === 'Тренируюсь в зале 3+ раз в неделю' || answers.activity === 'Профессиональный спорт') tags.push('предтренир');
+  tags.push('витамин'); // базовая поддержка — всегда актуальна
+  return [...new Set(tags)];
+}
+
+function pickConsultantProducts(tags) {
+  const active = state.products.filter(p => p.active && p.stock > 0);
+  const picked = []; const usedIds = new Set();
+  tags.forEach(tag => {
+    const match = active.find(p => !usedIds.has(p.id) && (
+      (p.category || '').toLowerCase().includes(tag) ||
+      (p.name || '').toLowerCase().includes(tag) ||
+      (p.description || '').toLowerCase().includes(tag)
+    ));
+    if (match) { picked.push(match); usedIds.add(match.id); }
+  });
+  return picked.slice(0, 6);
+}
+
 function renderConsultantStub() {
-  return `
+  const step = state.consultantStep || 'intro';
+  const header = `
     <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
     <div class="topbar-centered"><h1>Бот-консультант</h1></div>
-    <div class="empty-state">
-      <h3>🧬 Скоро здесь появится подбор добавок</h3>
-      <p>Расскажет, что подойдёт именно вам — по роду занятий, росту, весу и целям. Раздел в разработке, совсем скоро запустим.</p>
-    </div>
   `;
+
+  if (step === 'intro') {
+    return header + `
+      <div class="empty-state">
+        <h3>🧬 Подберём БАДы и спортпит под вас</h3>
+        <p>Ответьте на 4 коротких вопроса — соберём набор из нашего каталога специально под ваши цели, и подарим на него скидку 10%.</p>
+        <button class="btn btn-primary" data-action="consultant-start" style="margin-top:10px">Начать подбор</button>
+      </div>
+    `;
+  }
+
+  if (step === 'activity') {
+    return header + `
+      <div class="section" style="padding-top:0">
+        <h3 style="margin-bottom:12px">Чем вы занимаетесь по жизни?</h3>
+        <div class="manage-actions-list">
+          ${CONSULTANT_ACTIVITY_OPTIONS.map(o => `<button class="manage-action-btn" data-consultant-answer="activity" data-value="${o}">${o}</button>`).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  if (step === 'goal') {
+    return header + `
+      <div class="section" style="padding-top:0">
+        <h3 style="margin-bottom:12px">Какая у вас цель?</h3>
+        <div class="manage-actions-list">
+          ${CONSULTANT_GOAL_OPTIONS.map(o => `<button class="manage-action-btn" data-consultant-answer="goal" data-value="${o}">${o}</button>`).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  if (step === 'height' || step === 'weight') {
+    const isHeight = step === 'height';
+    return header + `
+      <div class="section" style="padding-top:0">
+        <h3 style="margin-bottom:12px">${isHeight ? 'Ваш рост, см' : 'Ваш вес, кг'}</h3>
+        <div class="field"><input id="consultant-input" type="number" placeholder="${isHeight ? 'напр. 175' : 'напр. 70'}" /></div>
+        <button class="btn btn-primary btn-block" data-action="consultant-next-numeric" data-field="${step}">Далее</button>
+      </div>
+    `;
+  }
+
+  if (step === 'result') {
+    const products = state.consultantProducts || [];
+    const selected = products.filter(p => state.consultantSelected[p.id] !== false);
+    const subtotal = selected.reduce((s, p) => s + p.price, 0);
+    const discounted = Math.round(subtotal * 0.9);
+    return header + `
+      <div class="section" style="padding-top:0">
+        <h3 style="margin-bottom:6px">Ваша персональная подборка</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Судя по вашим ответам (${state.consultantAnswers.activity}, цель — «${state.consultantAnswers.goal}»), рекомендуем начать с этого набора. Снимите галочку, если что-то не нужно.</p>
+        ${products.length === 0 ? `<div class="empty-state"><h3>Не нашли подходящих товаров</h3><p>Возможно, каталог сейчас пуст в нужных категориях — загляните позже.</p></div>` :
+          products.map(p => `
+            <div class="manage-row">
+              ${thumbHtml(p.image_url, 'thumb')}
+              <div class="info">
+                <div class="n">${p.name}</div>
+                <div class="m">${p.brand || ''} · ${p.price} ₽</div>
+              </div>
+              <input type="checkbox" data-consultant-toggle="${p.id}" ${state.consultantSelected[p.id] !== false ? 'checked' : ''} />
+            </div>
+          `).join('')
+        }
+        ${products.length > 0 ? `
+          <div class="row-between" style="margin:14px 0 4px;font-size:13px;color:var(--ink-soft)"><span>Сумма набора</span><span>${subtotal} ₽</span></div>
+          <div class="row-between" style="margin-bottom:14px"><strong>Со скидкой 10%</strong><span class="price-tag">${discounted} ₽</span></div>
+          <button class="btn btn-amber btn-block" data-action="consultant-add-to-cart">Добавить в корзину со скидкой 10%</button>
+        ` : ''}
+        <button class="btn btn-ghost btn-block" data-action="consultant-restart" style="margin-top:8px">Пройти заново</button>
+      </div>
+    `;
+  }
+
+  return header;
 }
 
 function renderBonusInfoPage() {
@@ -420,12 +533,18 @@ function renderCart() {
 
   const bday = state.user && state.user.birthdayDiscount;
   const birthdayEligible = bday && bday.eligible;
-  const afterBirthday = (state.checkoutUseBirthday && birthdayEligible) ? Math.round(total * (1 - bday.rate)) : total;
+  const cartProductIds = items.map(i => i.product.id);
+  const consultantEligible = state.consultantEligibleIds.length > 0 && cartProductIds.length > 0 &&
+    cartProductIds.every(id => state.consultantEligibleIds.includes(id));
+  // Скидки не суммируются: если выбрана скидка ДР — консультантскую не считаем, и наоборот
+  const useBirthday = state.checkoutUseBirthday && birthdayEligible;
+  const useConsultant = !useBirthday && state.checkoutUseConsultant && consultantEligible;
+  const afterDiscount = useBirthday ? Math.round(total * (1 - bday.rate)) : useConsultant ? Math.round(total * 0.9) : total;
   const deliveryCost = total < 500 ? 300 : total < 1000 ? 200 : total < 1500 ? 100 : 0;
   const bonusBalance = state.user ? state.user.bonus.balance : 0;
-  const maxBonus = Math.min(bonusBalance, Math.floor(afterBirthday * 0.5));
+  const maxBonus = Math.min(bonusBalance, Math.floor(afterDiscount * 0.5));
   const bonusUsed = Math.min(state.checkoutUseBonus, maxBonus);
-  const payable = afterBirthday - bonusUsed + deliveryCost;
+  const payable = afterDiscount - bonusUsed + deliveryCost;
 
   return `
     <div class="topbar-centered"><h1>Корзина</h1></div>
@@ -457,6 +576,14 @@ function renderCart() {
           </label>
         ` : ''}
 
+        ${consultantEligible ? `
+          <label class="row-between" style="padding:12px 14px;background:var(--sage);border-radius:12px;margin-bottom:12px;cursor:pointer">
+            <span>🧬 Скидка от бот-консультанта −10%</span>
+            <input type="checkbox" id="use-consultant" ${state.checkoutUseConsultant && !useBirthday ? 'checked' : ''} ${useBirthday ? 'disabled' : ''} />
+          </label>
+          ${useBirthday ? `<div style="font-size:11px;color:var(--ink-soft);margin:-8px 0 12px">Скидки не суммируются — сейчас выбрана скидка на день рождения</div>` : ''}
+        ` : ''}
+
         ${state.user && bonusBalance > 0 ? `
           <div class="field">
             <label>Списать бонусов (доступно ${bonusBalance} ₽, максимум 50% заказа — ${maxBonus} ₽)</label>
@@ -467,7 +594,8 @@ function renderCart() {
         <div class="row-between" style="margin:8px 0;font-size:13px;color:var(--ink-soft)">
           <span>Сумма товаров</span><span>${total} ₽</span>
         </div>
-        ${state.checkoutUseBirthday && birthdayEligible ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Скидка ДР</span><span>−${total - afterBirthday} ₽</span></div>` : ''}
+        ${useBirthday ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Скидка ДР</span><span>−${total - afterDiscount} ₽</span></div>` : ''}
+        ${useConsultant ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Скидка консультанта</span><span>−${total - afterDiscount} ₽</span></div>` : ''}
         ${bonusUsed > 0 ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Бонусами</span><span>−${bonusUsed} ₽</span></div>` : ''}
         <div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)">
           <span>Доставка${deliveryCost === 0 ? ' 🎉' : ''}</span><span>${deliveryCost === 0 ? 'Бесплатно' : deliveryCost + ' ₽'}</span>
@@ -1450,12 +1578,66 @@ function attachEvents() {
     tile.onclick = () => {
       state.view = tile.dataset.service;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
+      if (state.view === 'consultant') { state.consultantStep = 'intro'; state.consultantAnswers = {}; state.consultantSelected = {}; }
       render();
     };
   });
   app.querySelectorAll('[data-action="back-to-services"]').forEach(el => { el.onclick = () => { state.view = 'services'; render(); }; });
   const bonusInfoLink = app.querySelector('[data-action="go-to-bonus-info"]');
   if (bonusInfoLink) bonusInfoLink.onclick = () => { state.view = 'bonusInfo'; render(); };
+
+  // Бот-консультант
+  const consultantStartBtn = app.querySelector('[data-action="consultant-start"]');
+  if (consultantStartBtn) consultantStartBtn.onclick = () => { state.consultantStep = 'activity'; render(); };
+  app.querySelectorAll('[data-consultant-answer]').forEach(btn => {
+    btn.onclick = () => {
+      const field = btn.dataset.consultantAnswer;
+      state.consultantAnswers[field] = btn.dataset.value;
+      state.consultantStep = field === 'activity' ? 'goal' : 'height';
+      render();
+    };
+  });
+  const consultantNextBtn = app.querySelector('[data-action="consultant-next-numeric"]');
+  if (consultantNextBtn) {
+    consultantNextBtn.onclick = async () => {
+      const field = consultantNextBtn.dataset.field;
+      const value = Number(document.getElementById('consultant-input').value);
+      if (!value || value <= 0) { toast('Введите число'); return; }
+      state.consultantAnswers[field] = value;
+      if (field === 'height') { state.consultantStep = 'weight'; render(); return; }
+
+      // Оба числовых ответа собраны — считаем подборку
+      const tags = getConsultantTags(state.consultantAnswers);
+      state.consultantProducts = pickConsultantProducts(tags);
+      state.consultantSelected = {};
+      state.consultantStep = 'result';
+      render();
+    };
+  }
+  app.querySelectorAll('[data-consultant-toggle]').forEach(cb => {
+    cb.onchange = () => { state.consultantSelected[cb.dataset.consultantToggle] = cb.checked; render(); };
+  });
+  const consultantAddBtn = app.querySelector('[data-action="consultant-add-to-cart"]');
+  if (consultantAddBtn) {
+    consultantAddBtn.onclick = async () => {
+      const selected = state.consultantProducts.filter(p => state.consultantSelected[p.id] !== false);
+      if (selected.length === 0) { toast('Выберите хотя бы один товар'); return; }
+      if (!state.user) { toast('Откройте приложение в Telegram, чтобы сохранить подборку'); return; }
+      try {
+        await api('/api/consultant/session', { method: 'POST', body: { product_ids: selected.map(p => p.id) } });
+        selected.forEach(p => { state.cart[p.id] = Math.min((state.cart[p.id] || 0) + 1, p.stock); });
+        saveCart();
+        state.consultantEligibleIds = selected.map(p => p.id);
+        state.checkoutUseConsultant = true;
+        toast('Добавлено в корзину со скидкой 10%');
+        state.view = 'cart';
+        render();
+      } catch (e) { toast('Не удалось сохранить подборку'); }
+    };
+  }
+  const consultantRestartBtn = app.querySelector('[data-action="consultant-restart"]');
+  if (consultantRestartBtn) consultantRestartBtn.onclick = () => { state.consultantStep = 'intro'; state.consultantAnswers = {}; render(); };
+
   const copyRefBtn = app.querySelector('[data-action="copy-ref-link"]');
   if (copyRefBtn) copyRefBtn.onclick = () => {
     const input = document.getElementById('ref-link');
@@ -1526,6 +1708,8 @@ function attachEvents() {
 
   const birthdayCheckbox = app.querySelector('#use-birthday');
   if (birthdayCheckbox) birthdayCheckbox.onchange = () => { state.checkoutUseBirthday = birthdayCheckbox.checked; render(); };
+  const consultantCheckbox = app.querySelector('#use-consultant');
+  if (consultantCheckbox) consultantCheckbox.onchange = () => { state.checkoutUseConsultant = consultantCheckbox.checked; render(); };
   const bonusInput = app.querySelector('#use-bonus');
   if (bonusInput) bonusInput.oninput = () => { state.checkoutUseBonus = Number(bonusInput.value) || 0; render(); };
 
@@ -1541,11 +1725,12 @@ function attachEvents() {
           method: 'POST',
           body: {
             items, address, comment, phone: state.user.phone,
-            use_bonus: state.checkoutUseBonus, use_birthday_discount: state.checkoutUseBirthday
+            use_bonus: state.checkoutUseBonus, use_birthday_discount: state.checkoutUseBirthday,
+            use_consultant_discount: state.checkoutUseConsultant
           }
         });
         state.cart = {}; saveCart();
-        state.checkoutUseBonus = 0; state.checkoutUseBirthday = false;
+        state.checkoutUseBonus = 0; state.checkoutUseBirthday = false; state.checkoutUseConsultant = false; state.consultantEligibleIds = [];
         toast('Заказ оформлен!');
         state.user = await api('/api/profile/me');
         await refreshMyActiveOrders();
