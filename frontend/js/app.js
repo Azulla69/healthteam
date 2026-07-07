@@ -1,6 +1,6 @@
 // ---------- Состояние приложения ----------
 const state = {
-  view: 'catalog',
+  view: 'services',
   user: null,
   isAdmin: false,
   viewAsClient: false,
@@ -8,6 +8,10 @@ const state = {
   orders: [],
   myActiveOrdersCount: 0,
   cart: JSON.parse(localStorage.getItem('cart') || '{}'),
+  botUsername: '',
+  bonusHistory: [],
+  checkoutUseBonus: 0,
+  checkoutUseBirthday: false,
 
   catalogStep: 'sections',
   selectedSection: null,
@@ -65,10 +69,23 @@ if (tg) { tg.ready(); tg.expand(); }
 // ---------- Загрузка данных ----------
 async function loadInitialData() {
   try {
+    const cfg = await api('/api/config');
+    state.botUsername = cfg.botUsername || '';
+  } catch (e) { /* не критично */ }
+  try {
     if (tg && tg.initData) {
       state.user = await api('/api/profile/me');
       state.isAdmin = !!state.user.isAdmin;
       await refreshMyActiveOrders();
+
+      // Если открыто по реферальной ссылке (t.me/bot?startapp=ID) и ещё не привязан пригласивший
+      const startParam = tg.initDataUnsafe && tg.initDataUnsafe.start_param;
+      if (startParam && !state.user.referred_by) {
+        try {
+          await api('/api/profile/referral', { method: 'POST', body: { ref_code: startParam } });
+          state.user = await api('/api/profile/me');
+        } catch (e) { /* самореферал/некорректный код — игнорируем молча */ }
+      }
     }
   } catch (e) { /* гость */ }
   await loadProducts();
@@ -126,9 +143,12 @@ const app = document.getElementById('app');
 
 function render() {
   let html = '';
-  if (state.view === 'catalog') html = renderCatalog();
+  if (state.view === 'services') html = renderServices();
+  else if (state.view === 'catalog') html = renderCatalog();
+  else if (state.view === 'bonusInfo') html = renderBonusInfoPage();
+  else if (state.view === 'referral') html = renderReferralPage();
+  else if (state.view === 'consultant') html = renderConsultantStub();
   else if (state.view === 'cart') html = renderCart();
-  else if (state.view === 'orders') html = renderOrders();
   else if (state.view === 'profile') html = renderProfile();
   else if (state.view === 'manage') html = renderManage();
 
@@ -137,22 +157,124 @@ function render() {
 }
 
 function renderTabbar() {
-  const tabs = [
-    { id: 'catalog', label: 'Каталог', icon: '🌿' },
-    { id: 'cart', label: 'Корзина', icon: '🛒', badge: cartCount() },
-  ];
-  if (!effectiveAdmin()) tabs.push({ id: 'orders', label: 'Заказы', icon: '📦' });
-  tabs.push({ id: 'profile', label: 'Профиль', icon: '👤' });
-  if (effectiveAdmin()) tabs.push({ id: 'manage', label: 'Управление', icon: '⚙️' });
+  const tabs = effectiveAdmin()
+    ? [{ id: 'manage', label: 'Управление', icon: '⚙️' }]
+    : [
+        { id: 'services', label: 'Сервисы', icon: '✨' },
+        { id: 'cart', label: 'Корзина', icon: '🛒', badge: cartCount() },
+        { id: 'profile', label: 'Профиль', icon: '👤' },
+      ];
 
   return `
     <div class="tabbar">
       ${tabs.map(t => `
-        <button class="tab ${state.view === t.id ? 'active' : ''}" data-tab="${t.id}" style="position:relative;">
+        <button class="tab ${state.view === t.id || (t.id === 'services' && ['catalog', 'bonusInfo', 'referral', 'consultant'].includes(state.view)) ? 'active' : ''}" data-tab="${t.id}" style="position:relative;">
           <span>${t.icon}</span><span>${t.label}</span>
           ${t.badge ? `<span class="dot"></span>` : ''}
         </button>
       `).join('')}
+    </div>
+  `;
+}
+
+// ================= СЕРВИСЫ (главное меню клиента) =================
+function renderServices() {
+  const tiles = [
+    { id: 'catalog', emoji: '🌿', name: 'Каталог', desc: 'БАДы и спортивное питание' },
+    { id: 'consultant', emoji: '🧬', name: 'Бот-консультант', desc: 'Подбор добавок под вас' },
+    { id: 'bonusInfo', emoji: '🎁', name: 'Бонусная система', desc: 'Кэшбек и уровни' },
+    { id: 'referral', emoji: '🤝', name: 'Реферальная система', desc: 'Приглашайте друзей' },
+  ];
+  return `
+    <div class="topbar"><div><div class="eyebrow">Добро пожаловать</div><h1>HealthTeam</h1></div></div>
+    <div class="manage-menu" style="padding-top:4px">
+      ${tiles.map(t => `
+        <div class="manage-menu-tile service-tile" data-service="${t.id}">
+          <div class="emoji">${t.emoji}</div>
+          <div class="name">${t.name}</div>
+          <div style="font-size:11px;color:var(--ink-soft)">${t.desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderConsultantStub() {
+  return `
+    <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Бот-консультант</h1></div></div>
+    <div class="back-row" data-action="back-to-services">← Сервисы</div>
+    <div class="empty-state">
+      <h3>🧬 Скоро здесь появится подбор добавок</h3>
+      <p>Расскажет, что подойдёт именно вам — по роду занятий, росту, весу и целям. Раздел в разработке, совсем скоро запустим.</p>
+    </div>
+  `;
+}
+
+function renderBonusInfoPage() {
+  const bonus = state.user ? state.user.bonus : null;
+  return `
+    <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Бонусная система</h1></div></div>
+    <div class="back-row" data-action="back-to-services">← Сервисы</div>
+    <div class="section" style="padding-top:0">
+      ${bonus ? renderBonusCard(bonus, false) : ''}
+      ${state.user ? `<button class="btn btn-ghost btn-block" data-action="open-bonus-history" style="margin-bottom:16px">📜 История начислений и списаний</button>` : ''}
+
+      <div class="list-item">
+        <h3 style="margin-bottom:8px">Как это работает</h3>
+        <p style="font-size:13px;color:var(--ink-soft);line-height:1.6">
+          За каждую выполненную покупку вам возвращается кэшбек бонусами — в зависимости от того, сколько вы потратили за последние 6 месяцев (отсчёт идёт от вашей первой покупки):
+        </p>
+        <div style="margin:12px 0;display:flex;flex-direction:column;gap:6px;font-size:13px">
+          <div class="row-between"><span>🥉 Бронзовый — до 3 000 ₽</span><strong>3%</strong></div>
+          <div class="row-between"><span>🥈 Серебряный — от 3 000 ₽</span><strong>5%</strong></div>
+          <div class="row-between"><span>🥇 Золотой — от 6 000 ₽</span><strong>7%</strong></div>
+          <div class="row-between"><span>💎 Платиновый — от 10 000 ₽</span><strong>10%</strong></div>
+        </div>
+        <p style="font-size:13px;color:var(--ink-soft);line-height:1.6">
+          Кэшбек считается от суммы, которую вы реально оплатили — то есть если часть заказа оплачена бонусами, кэшбек начисляется только на оставшуюся часть.<br><br>
+          Бонусами можно оплатить до <strong>50%</strong> стоимости любого заказа.<br><br>
+          ⏳ Бонусы действуют <strong>3 месяца</strong> с момента начисления — потратить нужно успеть до сгорания, дальше в истории они будут отмечены как «сгорели».<br><br>
+          🎂 На день рождения — скидка <strong>15%</strong> на один заказ, доступна за 7 дней до и 7 дней после (15 дней в сумме).
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+function renderReferralPage() {
+  const ref = state.user ? state.user.referral : null;
+  if (!ref) {
+    return `
+      <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Реферальная система</h1></div></div>
+      <div class="back-row" data-action="back-to-services">← Сервисы</div>
+      <div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>
+    `;
+  }
+  const link = state.botUsername ? `https://t.me/${state.botUsername}?startapp=${ref.code}` : `(укажите BOT_USERNAME в настройках сервера)`;
+  return `
+    <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Реферальная система</h1></div></div>
+    <div class="back-row" data-action="back-to-services">← Сервисы</div>
+    <div class="section" style="padding-top:0">
+      <div class="bonus-card">
+        <div class="bonus-tier-name">🤝 Приглашайте друзей</div>
+        <div class="bonus-progress-label" style="margin-top:6px">Получайте ${Math.round(ref.rate * 100)}% от каждой их покупки бонусами — навсегда, бессрочно</div>
+      </div>
+      <div class="field"><label>Ваша реферальная ссылка</label><input id="ref-link" readonly value="${link}" /></div>
+      <button class="btn btn-primary btn-block" data-action="copy-ref-link">Скопировать ссылку</button>
+      <div class="stats-row" style="margin-top:16px">
+        <div class="stat-box"><div class="num">${ref.referredCount}</div><div class="lbl">Приглашено друзей</div></div>
+        <div class="stat-box"><div class="num">${Math.round(ref.rate * 100)}%</div><div class="lbl">С каждой покупки</div></div>
+      </div>
+      <div class="list-item">
+        <h3 style="margin-bottom:10px">Лесенка бонусов</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:10px">За рефералов, которые сделали покупки на сумму от ${ref.qualifyMin} ₽:</p>
+        ${ref.ladder.map(t => `
+          <div class="row-between" style="padding:6px 0;border-bottom:1px solid var(--line)">
+            <span style="font-size:13px">${ref.milestonesAwarded.includes(t.count) ? '✅' : '⬜️'} ${t.count} реферал(ов)</span>
+            <strong>${t.bonus} бонусов</strong>
+          </div>
+        `).join('')}
+      </div>
     </div>
   `;
 }
@@ -174,6 +296,7 @@ function renderCatalog() {
       .sort((a, b) => SECTION_ORDER.indexOf(a) - SECTION_ORDER.indexOf(b));
     return `
       <div class="topbar"><div><div class="eyebrow">Каталог товаров</div><h1>HealthTeam</h1></div></div>
+      <div class="back-row" data-action="back-to-services">← Сервисы</div>
       <div class="section-tiles">
         ${sections.map(s => `
           <div class="section-tile" data-section="${s}">
@@ -305,6 +428,14 @@ function renderCart() {
   const complete = profileComplete(state.user);
   const limitReached = state.myActiveOrdersCount >= 3;
 
+  const bday = state.user && state.user.birthdayDiscount;
+  const birthdayEligible = bday && bday.eligible;
+  const afterBirthday = (state.checkoutUseBirthday && birthdayEligible) ? Math.round(total * (1 - bday.rate)) : total;
+  const bonusBalance = state.user ? state.user.bonus.balance : 0;
+  const maxBonus = Math.min(bonusBalance, Math.floor(afterBirthday * 0.5));
+  const bonusUsed = Math.min(state.checkoutUseBonus, maxBonus);
+  const payable = afterBirthday - bonusUsed;
+
   return `
     <div class="topbar"><div><div class="eyebrow">Оформление</div><h1>Корзина</h1></div></div>
     <div class="section">
@@ -327,12 +458,33 @@ function renderCart() {
             </div>
           `).join('')}
         </div>
-        <div class="row-between" style="margin:16px 0;">
-          <strong>Итого</strong>
-          <span class="price-tag">${total} ₽</span>
+
+        ${birthdayEligible ? `
+          <label class="row-between" style="padding:12px 14px;background:var(--sage);border-radius:12px;margin-bottom:12px;cursor:pointer">
+            <span>🎂 Скидка ко дню рождения −${Math.round(bday.rate * 100)}%</span>
+            <input type="checkbox" id="use-birthday" ${state.checkoutUseBirthday ? 'checked' : ''} />
+          </label>
+        ` : ''}
+
+        ${state.user && bonusBalance > 0 ? `
+          <div class="field">
+            <label>Списать бонусов (доступно ${bonusBalance} ₽, максимум 50% заказа — ${maxBonus} ₽)</label>
+            <input type="number" id="use-bonus" min="0" max="${maxBonus}" value="${bonusUsed}" />
+          </div>
+        ` : ''}
+
+        <div class="row-between" style="margin:8px 0;font-size:13px;color:var(--ink-soft)">
+          <span>Сумма товаров</span><span>${total} ₽</span>
         </div>
+        ${state.checkoutUseBirthday && birthdayEligible ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Скидка ДР</span><span>−${total - afterBirthday} ₽</span></div>` : ''}
+        ${bonusUsed > 0 ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Бонусами</span><span>−${bonusUsed} ₽</span></div>` : ''}
+        <div class="row-between" style="margin:8px 0 16px;">
+          <strong>К оплате</strong>
+          <span class="price-tag">${payable} ₽</span>
+        </div>
+
         ${!state.user ? `<div class="empty-state"><h3>Нужен вход через Telegram</h3></div>` :
-          limitReached ? `<div class="limit-banner">У вас уже 3 активных заказа — это максимум одновременно. Дождитесь выполнения или отмените один из текущих заказов во вкладке «Заказы».</div>` :
+          limitReached ? `<div class="limit-banner">У вас уже 3 активных заказа — это максимум одновременно. Дождитесь выполнения или отмените один из текущих заказов в истории покупок в профиле.</div>` :
           !complete ? `
             <div class="profile-incomplete">Перед оформлением заказа заполните имя, фамилию и телефон в профиле.</div>
             <button class="btn btn-primary btn-block" data-action="go-to-profile">Заполнить профиль</button>
@@ -500,18 +652,25 @@ function openOrderDetailModal(order) {
 }
 
 // ================= ПРОФИЛЬ =================
+const AVATAR_EMOJIS = ['🦊', '🐨', '🐼', '🦉', '🐢', '🦁', '🐯', '🐸', '🐙', '🦄', '🐳', '🦋'];
+function avatarEmojiFor(telegramId) {
+  const s = String(telegramId || '0');
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return AVATAR_EMOJIS[hash % AVATAR_EMOJIS.length];
+}
+
 function renderProfile() {
   if (!state.user) {
     return `<div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div><div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>`;
   }
-  const initial = (state.user.first_name || state.user.username || '?').charAt(0).toUpperCase();
-  const stats = state.user.stats || { ordersCount: 0, totalSpent: 0 };
+  const avatar = avatarEmojiFor(state.user.telegram_id);
 
   return `
     <div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div>
     <div class="profile-header">
       <div class="profile-header-inner">
-        <div class="avatar-lg">${initial}</div>
+        <div class="avatar-lg">${avatar}</div>
         <div class="pname">${state.user.first_name || 'Без имени'} ${state.user.last_name || ''}</div>
       </div>
       <button class="settings-gear" data-action="open-settings">⚙️</button>
@@ -528,22 +687,20 @@ function renderProfile() {
           </button>
         </div>
       ` : ''}
-      <div class="stats-row">
-        <div class="stat-box"><div class="num">${stats.ordersCount}</div><div class="lbl">Заказов сделано</div></div>
-        <div class="stat-box"><div class="num">${stats.totalSpent} ₽</div><div class="lbl">Всего потрачено</div></div>
-      </div>
       ${renderBonusCard(state.user.bonus)}
-      ${!profileComplete(state.user) ? `<div class="profile-incomplete">Заполните имя, фамилию и телефон в настройках (⚙️ вверху).</div>` : ''}
+      <button class="manage-action-btn" data-action="open-bonus-history"><span class="emoji">🎁</span> Бонусы: ${state.user.bonus.balance} ₽ — история</button>
+      <button class="manage-action-btn" style="margin-top:8px" data-action="open-purchase-history"><span class="emoji">📦</span> История покупок</button>
+      ${!profileComplete(state.user) ? `<div class="profile-incomplete" style="margin-top:14px">Заполните имя, фамилию и телефон в настройках (⚙️ вверху).</div>` : ''}
     </div>
   `;
 }
 
-function renderBonusCard(bonus) {
+function renderBonusCard(bonus, clickable = true) {
   if (!bonus) return '';
   const tierEmoji = { 'Бронзовый': '🥉', 'Серебряный': '🥈', 'Золотой': '🥇', 'Платиновый': '💎' };
   const progressPct = bonus.isMaxTier ? 100 : Math.min(100, Math.round((bonus.periodSpent / bonus.nextTierThreshold) * 100));
   return `
-    <div class="bonus-card">
+    <div class="bonus-card" ${clickable ? 'data-action="go-to-bonus-info" style="cursor:pointer"' : ''}>
       <div class="row-between">
         <span class="tier-badge">${tierEmoji[bonus.tier] || ''} ${bonus.tier}</span>
         <span class="bonus-balance">${bonus.balance} ₽ бонусов</span>
@@ -555,6 +712,55 @@ function renderBonusCard(bonus) {
       </div>
     </div>
   `;
+}
+
+async function openBonusHistoryModal() {
+  const history = await api('/api/profile/bonus-history');
+  const STATUS_TXT = { active: 'Активен', spent: 'Списание', expired: 'Сгорел', used: 'Использован', revoked: 'Аннулирован' };
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>История бонусов</h3>
+      ${history.length === 0 ? `<div class="empty-state"><h3>Пока пусто</h3></div>` :
+        history.map(t => `
+          <div class="ledger-entry">
+            <div>
+              <div class="desc">${t.label}</div>
+              <div class="date">${fmtDate(t.created_at)} · ${STATUS_TXT[t.status] || t.status}${t.type !== 'redeem' && t.status === 'active' ? ` · до ${fmtDate(t.expires_at)}` : ''}</div>
+            </div>
+            <div class="amt ${t.type === 'redeem' ? 'expense' : 'income'}">${t.type === 'redeem' ? '−' : '+'}${t.amount} ₽</div>
+          </div>
+        `).join('')
+      }
+      <button class="btn btn-ghost btn-block" id="bh-close" style="margin-top:10px">Закрыть</button>
+    </div>
+  `;
+  backdrop.querySelector('#bh-close').onclick = () => backdrop.remove();
+  document.body.appendChild(backdrop);
+}
+
+async function openPurchaseHistoryModal() {
+  const orders = await api('/api/orders/my');
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>История покупок</h3>
+      ${orders.length === 0 ? `<div class="empty-state"><h3>Заказов пока нет</h3></div>` :
+        orders.map(o => `
+          <div class="list-item">
+            <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
+            <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
+            <div class="row-between"><span class="price-tag">${o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
+          </div>
+        `).join('')
+      }
+      <button class="btn btn-ghost btn-block" id="ph-close" style="margin-top:10px">Закрыть</button>
+    </div>
+  `;
+  backdrop.querySelector('#ph-close').onclick = () => backdrop.remove();
+  document.body.appendChild(backdrop);
 }
 
 function openSettingsModal() {
@@ -1235,13 +1441,34 @@ function attachEvents() {
   app.querySelectorAll('[data-tab]').forEach(btn => {
     btn.onclick = async () => {
       state.view = btn.dataset.tab;
-      if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
-      if (state.view === 'orders' && state.user) await loadOrders();
       if (state.view === 'manage') { state.manageSection = null; }
       if (state.view === 'cart' && state.user) await refreshMyActiveOrders();
       render();
     };
   });
+
+  // Сервисы: переход к разделу
+  app.querySelectorAll('[data-service]').forEach(tile => {
+    tile.onclick = () => {
+      state.view = tile.dataset.service;
+      if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
+      render();
+    };
+  });
+  app.querySelectorAll('[data-action="back-to-services"]').forEach(el => { el.onclick = () => { state.view = 'services'; render(); }; });
+  const bonusInfoLink = app.querySelector('[data-action="go-to-bonus-info"]');
+  if (bonusInfoLink) bonusInfoLink.onclick = () => { state.view = 'bonusInfo'; render(); };
+  const copyRefBtn = app.querySelector('[data-action="copy-ref-link"]');
+  if (copyRefBtn) copyRefBtn.onclick = () => {
+    const input = document.getElementById('ref-link');
+    input.select();
+    try { navigator.clipboard.writeText(input.value); toast('Ссылка скопирована'); }
+    catch (e) { document.execCommand('copy'); toast('Ссылка скопирована'); }
+  };
+  const bonusHistoryBtn = app.querySelector('[data-action="open-bonus-history"]');
+  if (bonusHistoryBtn) bonusHistoryBtn.onclick = () => openBonusHistoryModal();
+  const purchaseHistoryBtn = app.querySelector('[data-action="open-purchase-history"]');
+  if (purchaseHistoryBtn) purchaseHistoryBtn.onclick = () => openPurchaseHistoryModal();
 
   // Каталог
   app.querySelectorAll('[data-section]').forEach(tile => {
@@ -1302,6 +1529,11 @@ function attachEvents() {
   });
   app.querySelectorAll('[data-action="go-to-profile"]').forEach(el => { el.onclick = (e) => { e.preventDefault(); state.view = 'profile'; render(); }; });
 
+  const birthdayCheckbox = app.querySelector('#use-birthday');
+  if (birthdayCheckbox) birthdayCheckbox.onchange = () => { state.checkoutUseBirthday = birthdayCheckbox.checked; render(); };
+  const bonusInput = app.querySelector('#use-bonus');
+  if (bonusInput) bonusInput.oninput = () => { state.checkoutUseBonus = Number(bonusInput.value) || 0; render(); };
+
   const checkoutBtn = app.querySelector('[data-action="checkout"]');
   if (checkoutBtn) {
     checkoutBtn.onclick = async () => {
@@ -1310,15 +1542,24 @@ function attachEvents() {
       const comment = document.getElementById('checkout-comment').value.trim();
       if (!address) { toast('Укажите адрес доставки'); return; }
       try {
-        await api('/api/orders', { method: 'POST', body: { items, address, comment, phone: state.user.phone } });
+        await api('/api/orders', {
+          method: 'POST',
+          body: {
+            items, address, comment, phone: state.user.phone,
+            use_bonus: state.checkoutUseBonus, use_birthday_discount: state.checkoutUseBirthday
+          }
+        });
         state.cart = {}; saveCart();
+        state.checkoutUseBonus = 0; state.checkoutUseBirthday = false;
         toast('Заказ оформлен!');
-        state.view = 'orders';
-        await loadOrders(); await refreshMyActiveOrders();
+        state.user = await api('/api/profile/me');
+        await refreshMyActiveOrders();
+        state.view = 'profile';
         render();
       } catch (e) {
         if (e.message === 'too_many_active_orders') toast('Максимум 3 активных заказа одновременно');
         else if (e.message === 'insufficient_stock') toast('Одного из товаров не хватает на складе');
+        else if (e.message === 'insufficient_bonus') toast('Недостаточно бонусов');
         else toast('Не удалось оформить заказ');
       }
     };
@@ -1401,5 +1642,46 @@ function attachEvents() {
     };
   });
 }
+
+// ---------- Анимация частиц на фоне ----------
+function initParticles() {
+  const canvas = document.getElementById('particles');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let w, h, particles;
+
+  function resize() {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+  }
+  function makeParticles() {
+    const count = Math.min(36, Math.floor((w * h) / 26000));
+    particles = Array.from({ length: count }, () => ({
+      x: Math.random() * w, y: Math.random() * h,
+      r: 1.5 + Math.random() * 2.5,
+      vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25,
+      hue: Math.random() > 0.5 ? '19,135,108' : '32,40,44',
+      alpha: 0.12 + Math.random() * 0.18
+    }));
+  }
+  function tick() {
+    ctx.clearRect(0, 0, w, h);
+    particles.forEach(p => {
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = w; if (p.x > w) p.x = 0;
+      if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${p.hue},${p.alpha})`;
+      ctx.fill();
+    });
+    requestAnimationFrame(tick);
+  }
+  resize();
+  makeParticles();
+  window.addEventListener('resize', () => { resize(); makeParticles(); });
+  tick();
+}
+initParticles();
 
 loadInitialData();

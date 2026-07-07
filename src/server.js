@@ -31,6 +31,7 @@ const db = require('./db');
 app.use('/uploads', express.static(path.join(db.DATA_DIR, 'uploads')));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/api/config', (req, res) => res.json({ botUsername: process.env.BOT_USERNAME || '' }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

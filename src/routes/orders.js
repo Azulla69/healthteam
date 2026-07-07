@@ -14,11 +14,12 @@ function errorResponse(res, result) {
 }
 
 router.post('/', requireAuth, (req, res) => {
-  const { items, comment, phone, address } = req.body;
+  const { items, comment, phone, address, use_bonus, use_birthday_discount } = req.body;
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'empty_cart' });
   const result = db.createOrder({
     user_id: req.user.id, items, comment,
-    phone: phone || req.user.phone, address: address || req.user.address
+    phone: phone || req.user.phone, address: address || req.user.address,
+    use_bonus, use_birthday_discount
   });
   if (result.error) return errorResponse(res, result);
   res.status(201).json(result.order);

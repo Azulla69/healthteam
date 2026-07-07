@@ -717,3 +717,20 @@ img.thumb { width: 44px; height: 44px; }
   background: rgba(255,255,255,0.25);
 }
 
+
+/* ---- Частицы на фоне ---- */
+#particles {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+#app { position: relative; z-index: 1; }
+
+/* ---- Плитки сервисов и яркие акценты ---- */
+.service-tile { background: linear-gradient(155deg, var(--surface), #F4FAF8); border: 1px solid var(--line); }
+.service-tile .emoji { font-size: 28px; }
+.bonus-card { box-shadow: 0 8px 24px rgba(19, 135, 108, 0.25); }
+.btn-primary { box-shadow: 0 4px 14px rgba(18, 23, 26, 0.18); }
+.btn-amber { box-shadow: 0 4px 14px rgba(19, 135, 108, 0.30); }
+.section-tile { box-shadow: 0 8px 22px rgba(18, 23, 26, 0.22); }

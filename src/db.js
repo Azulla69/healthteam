@@ -16,6 +16,16 @@ const BONUS_TIERS = [
   { name: 'Серебряный', min: 3000, rate: 0.05 },
   { name: 'Бронзовый', min: 0, rate: 0.03 },
 ];
+const BONUS_EXPIRY_MONTHS = 3;
+const REFERRAL_RATE = 0.05;
+const REFERRAL_QUALIFY_MIN = 500;
+const REFERRAL_LADDER = [
+  { count: 1, bonus: 100 }, { count: 3, bonus: 300 }, { count: 5, bonus: 500 },
+  { count: 10, bonus: 1000 }, { count: 20, bonus: 2000 }
+];
+const BIRTHDAY_DISCOUNT_RATE = 0.15;
+const BIRTHDAY_WINDOW_DAYS = 7;
+const MAX_BONUS_PAYMENT_SHARE = 0.5;
 
 function seedProducts() {
   const now = new Date().toISOString();
@@ -58,8 +68,8 @@ function seedProducts() {
 function loadDefault() {
   const products = seedProducts();
   return {
-    users: [], products, orders: [], order_items: [], ledger: [],
-    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1 }
+    users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [],
+    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1 }
   };
 }
 
@@ -67,11 +77,26 @@ let data;
 if (fs.existsSync(DB_FILE)) {
   data = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
   if (!data.ledger) data.ledger = [];
+  if (!data.bonus_tx) data.bonus_tx = [];
   if (!data.seq.ledger) data.seq.ledger = 1;
   if (!data.seq.batches) data.seq.batches = 1;
+  if (!data.seq.bonus_tx) data.seq.bonus_tx = 1;
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
+    if (u.referred_by === undefined) u.referred_by = null;
+    if (u.referral_milestones_awarded === undefined) u.referral_milestones_awarded = [];
+    if (u.birthday_discount_used_at === undefined) u.birthday_discount_used_at = null;
+    // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
+    if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
+      const now = new Date();
+      const expires = new Date(now); expires.setMonth(expires.getMonth() + BONUS_EXPIRY_MONTHS);
+      data.bonus_tx.push({
+        id: data.seq.bonus_tx++, user_id: u.id, type: 'cashback', amount: u.bonus_balance,
+        remaining: u.bonus_balance, created_at: now.toISOString(), expires_at: expires.toISOString(),
+        order_id: null, description: 'Перенос баланса из старой системы'
+      });
+    }
   });
 } else {
   data = loadDefault();
@@ -93,12 +118,26 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
       id: nextId('users'), telegram_id, username, first_name, last_name,
       phone: '', address: '', birth_date: null, birth_date_updated_at: null,
       bonus_balance: 0, first_purchase_at: null,
+      referred_by: null, referral_milestones_awarded: [], birthday_discount_used_at: null,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
   }
   persist();
   return user;
+}
+
+// Привязывает пользователя к пригласившему (один раз, при первом визите по реф-ссылке)
+function setReferrer(user_id, referrerTelegramId) {
+  const user = getUser(user_id);
+  if (!user) return { error: 'not_found' };
+  if (user.referred_by) return { error: 'already_set' };
+  if (String(referrerTelegramId) === String(user.telegram_id)) return { error: 'self_referral' };
+  const referrer = data.users.find(u => u.telegram_id === String(referrerTelegramId));
+  if (!referrer) return { error: 'referrer_not_found' };
+  user.referred_by = referrer.telegram_id;
+  persist();
+  return { ok: true };
 }
 
 function updateUser(id, fields) {
@@ -257,20 +296,55 @@ function countActiveOrders(user_id) {
   return data.orders.filter(o => o.user_id === user_id && ACTIVE_STATUSES.includes(o.status)).length;
 }
 
-function createOrder({ user_id, items, comment, phone, address }) {
+function createOrder({ user_id, items, comment, phone, address, use_bonus, use_birthday_discount }) {
   if (countActiveOrders(user_id) >= MAX_ACTIVE_ORDERS) return { error: 'too_many_active_orders', limit: MAX_ACTIVE_ORDERS };
   const resolved = resolveItems(items);
   if (resolved.error) return resolved;
   if (resolved.resolvedItems.length === 0) return { error: 'no_valid_items' };
 
+  const user = getUser(user_id);
+  let total = resolved.total;
+  let birthdayDiscountAmount = 0;
+  let birthdayApplied = false;
+
+  if (use_birthday_discount && user) {
+    const bd = getBirthdayDiscountInfo(user);
+    if (bd.eligible) {
+      birthdayDiscountAmount = Math.round(total * BIRTHDAY_DISCOUNT_RATE);
+      total -= birthdayDiscountAmount;
+      birthdayApplied = true;
+    }
+  }
+
+  let bonusRedeemed = 0;
+  const requestedBonus = Math.max(0, Number(use_bonus) || 0);
+  if (requestedBonus > 0) {
+    const maxByShare = Math.floor(total * MAX_BONUS_PAYMENT_SHARE);
+    const available = getBonusBalance(user_id);
+    bonusRedeemed = Math.min(requestedBonus, maxByShare, available);
+    if (bonusRedeemed > 0) redeemBonuses(user_id, bonusRedeemed, null); // order_id проставим ниже, после создания
+  }
+
+  const paidAmount = total - bonusRedeemed;
+
   const order = {
     id: nextId('orders'), user_id, status: 'processing', paid: false,
-    total: resolved.total, comment: comment || '', admin_comment: '',
+    total: resolved.total, birthday_discount_applied: birthdayApplied, birthday_discount_amount: birthdayDiscountAmount,
+    bonus_redeemed: bonusRedeemed, paid_amount: paidAmount,
+    comment: comment || '', admin_comment: '',
     phone: phone || '', address: address || '', created_at: new Date().toISOString()
   };
   data.orders.push(order);
   const items_ = resolved.resolvedItems.map(i => ({ id: nextId('order_items'), order_id: order.id, ...i }));
   data.order_items.push(...items_);
+
+  // Проставляем order_id в записи о списании бонусов и отмечаем применение скидки ДР
+  if (bonusRedeemed > 0) {
+    const tx = data.bonus_tx.filter(t => t.user_id === user_id && t.type === 'redeem' && t.order_id === null).pop();
+    if (tx) tx.order_id = order.id;
+  }
+  if (birthdayApplied) user.birthday_discount_used_at = new Date().toISOString();
+
   persist();
   return { order: { ...order, items: items_ } };
 }
@@ -288,7 +362,8 @@ function createManualOrder({ user_id, items, description }) {
   const now = new Date().toISOString();
   const order = {
     id: nextId('orders'), user_id, status: 'completed', paid: true,
-    total: resolved.total, comment: description || 'Продажа оформлена вручную', admin_comment: '',
+    total: resolved.total, paid_amount: resolved.total, bonus_redeemed: 0, birthday_discount_applied: false, birthday_discount_amount: 0,
+    comment: description || 'Продажа оформлена вручную', admin_comment: '',
     phone: '', address: 'Продажа оформлена вручную (без доставки)',
     created_at: now, completed_at: now
   };
@@ -298,6 +373,7 @@ function createManualOrder({ user_id, items, description }) {
 
   resolved.resolvedItems.forEach(i => removeStock(i.product_id, i.qty));
   awardCashback(order);
+  awardReferral(order);
   addLedgerEntry({ type: 'income', amount: order.total, description: `Заказ №${order.id} (вручную)`, date: now, auto: true, order_id: order.id });
   persist();
   return { order: attachItems(order) };
@@ -344,6 +420,7 @@ function adminOrUserCancel(id, { isAdmin } = {}) {
 
   if (!isAdmin) {
     if (order.status !== 'processing') return { error: 'not_cancellable' };
+    if (order.bonus_redeemed > 0) refundBonuses(order.user_id, order.bonus_redeemed, order.id);
     data.orders = data.orders.filter(o => o.id !== order.id);
     data.order_items = data.order_items.filter(i => i.order_id !== order.id);
     persist();
@@ -353,12 +430,10 @@ function adminOrUserCancel(id, { isAdmin } = {}) {
   if (order.status === 'delivering' || order.status === 'completed') {
     restoreStockForOrder(order);
   }
+  if (order.bonus_redeemed > 0) refundBonuses(order.user_id, order.bonus_redeemed, order.id);
   if (order.status === 'completed') {
     data.ledger = data.ledger.filter(e => !(e.order_id === order.id && e.auto));
-    if (order.cashback_awarded) {
-      const user = getUser(order.user_id);
-      if (user) user.bonus_balance = Math.max(0, (user.bonus_balance || 0) - order.cashback_awarded);
-    }
+    revokeEarnedForOrder(order.id);
   }
   data.orders = data.orders.filter(o => o.id !== order.id);
   data.order_items = data.order_items.filter(i => i.order_id !== order.id);
@@ -387,6 +462,7 @@ function moveToCompleted(id) {
   order.status = 'completed';
   order.completed_at = new Date().toISOString();
   awardCashback(order);
+  awardReferral(order);
   addLedgerEntry({ type: 'income', amount: order.total, description: `Заказ №${order.id}`, date: order.completed_at, auto: true, order_id: order.id });
   persist();
   return { order: attachItems(order) };
@@ -400,7 +476,83 @@ function setOrderPaid(id, paid) {
   return { order: attachItems(order) };
 }
 
-// ---------- Бонусная программа ----------
+// ---------- Бонусы: транзакции (начисления сгорают через 3 месяца, списание — FIFO) ----------
+function addEarnTx(user_id, type, amount, order_id, description) {
+  if (amount <= 0) return;
+  const now = new Date();
+  const expires = new Date(now); expires.setMonth(expires.getMonth() + BONUS_EXPIRY_MONTHS);
+  data.bonus_tx.push({
+    id: nextId('bonus_tx'), user_id, type, amount, remaining: amount,
+    created_at: now.toISOString(), expires_at: expires.toISOString(),
+    order_id, description
+  });
+}
+
+function getBonusBalance(user_id) {
+  const now = new Date();
+  return data.bonus_tx
+    .filter(t => t.user_id === user_id && t.remaining > 0 && new Date(t.expires_at) > now)
+    .reduce((sum, t) => sum + t.remaining, 0);
+}
+
+// Списывает бонусы (FIFO — сначала те, что сгорят раньше), возвращает {ok, redeemed} либо {error}
+function redeemBonuses(user_id, amount, order_id) {
+  if (amount <= 0) return { ok: true, redeemed: 0 };
+  const available = getBonusBalance(user_id);
+  if (amount > available) return { error: 'insufficient_bonus', available };
+  const now = new Date();
+  let remaining = amount;
+  const earners = data.bonus_tx
+    .filter(t => t.user_id === user_id && t.remaining > 0 && new Date(t.expires_at) > now)
+    .sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at));
+  for (const tx of earners) {
+    if (remaining <= 0) break;
+    const take = Math.min(tx.remaining, remaining);
+    tx.remaining -= take;
+    remaining -= take;
+  }
+  data.bonus_tx.push({
+    id: nextId('bonus_tx'), user_id, type: 'redeem', amount, remaining: 0,
+    created_at: now.toISOString(), expires_at: now.toISOString(), order_id,
+    description: `Списание бонусов на заказ №${order_id}`
+  });
+  return { ok: true, redeemed: amount };
+}
+
+// Возврат списанных бонусов (при отмене заказа) — новым начислением с новым сроком сгорания
+function refundBonuses(user_id, amount, order_id) {
+  if (amount > 0) addEarnTx(user_id, 'refund', amount, order_id, `Возврат бонусов за отменённый заказ №${order_id}`);
+}
+
+// Аннулирует начисленный за заказ кэшбек/реферальный бонус (при отмене выполненного заказа)
+function revokeEarnedForOrder(order_id) {
+  data.bonus_tx.forEach(t => {
+    if (t.order_id === order_id && ['cashback', 'referral'].includes(t.type) && t.remaining > 0) {
+      t.remaining = 0;
+      t.revoked = true;
+    }
+  });
+}
+
+function getBonusHistory(user_id) {
+  const now = new Date();
+  return data.bonus_tx.filter(t => t.user_id === user_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .map(t => {
+      let status = 'active';
+      if (t.type === 'redeem') status = 'spent';
+      else if (t.revoked) status = 'revoked';
+      else if (t.remaining <= 0) status = 'used';
+      else if (new Date(t.expires_at) <= now) status = 'expired';
+      return { ...t, status };
+    });
+}
+
+const TX_LABELS = {
+  cashback: 'Кэшбек', referral: 'Бонус за реферала', referral_ladder: 'Реферальная лесенка',
+  redeem: 'Списание на заказ', refund: 'Возврат за отменённый заказ'
+};
+
+// ---------- Бонусная программа: уровни кэшбека ----------
 function getBonusTier(periodSpent) {
   return BONUS_TIERS.find(t => periodSpent >= t.min);
 }
@@ -425,16 +577,17 @@ function getPeriodSpent(user_id, periodStart, periodEnd) {
       const d = new Date(o.completed_at);
       return d >= periodStart && d < periodEnd;
     })
-    .reduce((sum, o) => sum + o.total, 0);
+    .reduce((sum, o) => sum + (o.paid_amount != null ? o.paid_amount : o.total), 0);
 }
 
 function getBonusInfo(user) {
   const tiersAsc = [...BONUS_TIERS].sort((a, b) => a.min - b.min);
+  const balance = getBonusBalance(user.id);
   if (!user.first_purchase_at) {
     const tier = getBonusTier(0);
     const next = tiersAsc.find(t => t.min > 0);
     return {
-      balance: user.bonus_balance || 0, tier: tier.name, rate: tier.rate,
+      balance, tier: tier.name, rate: tier.rate,
       periodSpent: 0, periodStart: null, periodEnd: null,
       nextTierThreshold: next ? next.min : null, isMaxTier: !next
     };
@@ -444,27 +597,76 @@ function getBonusInfo(user) {
   const tier = getBonusTier(periodSpent);
   const next = tiersAsc.find(t => t.min > tier.min);
   return {
-    balance: user.bonus_balance || 0, tier: tier.name, rate: tier.rate,
+    balance, tier: tier.name, rate: tier.rate,
     periodSpent, periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString(),
     nextTierThreshold: next ? next.min : null, isMaxTier: !next
   };
 }
 
-// Начисляет кэшбек за выполненный заказ (вызывается при переводе в "Выполнено" и при ручной продаже)
+// Начисляет кэшбек за выполненный заказ — считается от ОПЛАЧЕННОЙ суммы (total минус списанные бонусы и скидка ДР)
 function awardCashback(order) {
   const user = getUser(order.user_id);
   if (!user) return 0;
   if (!user.first_purchase_at) user.first_purchase_at = order.completed_at;
 
+  const base = order.paid_amount != null ? order.paid_amount : order.total;
   const { periodStart, periodEnd } = getBonusPeriodBounds(user.first_purchase_at);
   const periodSpent = getPeriodSpent(user.id, periodStart, periodEnd);
   const tier = getBonusTier(periodSpent);
-  const cashback = Math.round(order.total * tier.rate);
+  const cashback = Math.round(base * tier.rate);
 
-  user.bonus_balance = (user.bonus_balance || 0) + cashback;
+  if (cashback > 0) addEarnTx(user.id, 'cashback', cashback, order.id, `Кэшбек за заказ №${order.id}`);
   order.cashback_awarded = cashback;
   order.cashback_tier = tier.name;
   return cashback;
+}
+
+// Реферальные начисления: 5% пригласившему + проверка реферальной "лесенки"
+function awardReferral(order) {
+  const buyer = getUser(order.user_id);
+  if (!buyer || !buyer.referred_by) return;
+  const referrer = data.users.find(u => u.telegram_id === buyer.referred_by);
+  if (!referrer) return;
+
+  const base = order.paid_amount != null ? order.paid_amount : order.total;
+  const commission = Math.round(base * REFERRAL_RATE);
+  if (commission > 0) addEarnTx(referrer.id, 'referral', commission, order.id, `5% с покупки реферала (заказ №${order.id})`);
+
+  // Считаем, сколько рефералов уже "квалифицировались" (сумма покупок >= 500₽), и выдаём лесенку
+  const referredUsers = data.users.filter(u => u.referred_by === referrer.telegram_id);
+  const qualifyingCount = referredUsers.filter(ru => {
+    const spent = data.orders.filter(o => o.user_id === ru.id && o.status === 'completed')
+      .reduce((s, o) => s + (o.paid_amount != null ? o.paid_amount : o.total), 0);
+    return spent >= REFERRAL_QUALIFY_MIN;
+  }).length;
+
+  REFERRAL_LADDER.forEach(tier => {
+    if (qualifyingCount >= tier.count && !referrer.referral_milestones_awarded.includes(tier.count)) {
+      addEarnTx(referrer.id, 'referral_ladder', tier.bonus, order.id, `Лесенка: ${tier.count} реферал(ов) с покупками от ${REFERRAL_QUALIFY_MIN}₽`);
+      referrer.referral_milestones_awarded.push(tier.count);
+    }
+  });
+}
+
+// ---------- Скидка ко дню рождения ----------
+function getBirthdayWindow(birthDate, now = new Date()) {
+  const bd = new Date(birthDate);
+  for (const yearOffset of [-1, 0, 1]) {
+    const bday = new Date(now.getFullYear() + yearOffset, bd.getMonth(), bd.getDate());
+    const start = new Date(bday); start.setDate(start.getDate() - BIRTHDAY_WINDOW_DAYS);
+    const end = new Date(bday); end.setDate(end.getDate() + BIRTHDAY_WINDOW_DAYS + 1); // +1 включительно весь последний день
+    if (now >= start && now < end) return { start, end, bday };
+  }
+  return null;
+}
+
+function getBirthdayDiscountInfo(user) {
+  if (!user.birth_date) return { eligible: false };
+  const window = getBirthdayWindow(user.birth_date);
+  if (!window) return { eligible: false };
+  const usedAt = user.birthday_discount_used_at ? new Date(user.birthday_discount_used_at) : null;
+  const alreadyUsed = usedAt && usedAt >= window.start && usedAt < window.end;
+  return { eligible: !alreadyUsed, rate: BIRTHDAY_DISCOUNT_RATE, windowEnd: window.end.toISOString() };
 }
 
 
@@ -530,12 +732,13 @@ function getShopStats() {
 
 module.exports = {
   DATA_DIR,
-  upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown,
+  upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown, setReferrer,
   getProducts, getProduct, createProduct, updateProduct, hideProduct, deleteProductHard,
   addStock, removeStock, sanitizeProduct, nearestExpiry,
   createOrder, createManualOrder, getOrdersByUser, getAllOrders, getUserStats,
   getOrderRaw, updateOrder, adminOrUserCancel, moveToDelivering, moveToCompleted, setOrderPaid,
   countActiveOrders, MAX_ACTIVE_ORDERS,
   addLedgerEntry, getLedger, deleteLedgerEntry, getBalance, getShopStats,
-  getBonusInfo
+  getBonusInfo, getBonusBalance, getBonusHistory, redeemBonuses, TX_LABELS,
+  getBirthdayDiscountInfo, REFERRAL_RATE, REFERRAL_QUALIFY_MIN, REFERRAL_LADDER, MAX_BONUS_PAYMENT_SHARE
 };
