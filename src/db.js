@@ -26,6 +26,17 @@ const REFERRAL_LADDER = [
 const BIRTHDAY_DISCOUNT_RATE = 0.15;
 const BIRTHDAY_WINDOW_DAYS = 7;
 const MAX_BONUS_PAYMENT_SHARE = 0.5;
+const SIGNUP_BONUS = 100;
+const DELIVERY_TIERS = [
+  { max: 500, cost: 300 },
+  { max: 1000, cost: 200 },
+  { max: 1500, cost: 100 },
+  { max: Infinity, cost: 0 }
+];
+
+function getDeliveryCost(itemsTotal) {
+  return DELIVERY_TIERS.find(t => itemsTotal < t.max).cost;
+}
 
 function seedProducts() {
   const now = new Date().toISOString();
@@ -122,6 +133,7 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
       created_at: new Date().toISOString()
     };
     data.users.push(user);
+    addEarnTx(user.id, 'signup', SIGNUP_BONUS, null, 'Бонус за регистрацию');
   }
   persist();
   return user;
@@ -326,11 +338,13 @@ function createOrder({ user_id, items, comment, phone, address, use_bonus, use_b
   }
 
   const paidAmount = total - bonusRedeemed;
+  const deliveryCost = getDeliveryCost(resolved.total);
+  const payableTotal = paidAmount + deliveryCost;
 
   const order = {
     id: nextId('orders'), user_id, status: 'processing', paid: false,
     total: resolved.total, birthday_discount_applied: birthdayApplied, birthday_discount_amount: birthdayDiscountAmount,
-    bonus_redeemed: bonusRedeemed, paid_amount: paidAmount,
+    bonus_redeemed: bonusRedeemed, delivery_cost: deliveryCost, paid_amount: paidAmount, payable_total: payableTotal,
     comment: comment || '', admin_comment: '',
     phone: phone || '', address: address || '', created_at: new Date().toISOString()
   };
@@ -362,7 +376,7 @@ function createManualOrder({ user_id, items, description }) {
   const now = new Date().toISOString();
   const order = {
     id: nextId('orders'), user_id, status: 'completed', paid: true,
-    total: resolved.total, paid_amount: resolved.total, bonus_redeemed: 0, birthday_discount_applied: false, birthday_discount_amount: 0,
+    total: resolved.total, paid_amount: resolved.total, payable_total: resolved.total, delivery_cost: 0, bonus_redeemed: 0, birthday_discount_applied: false, birthday_discount_amount: 0,
     comment: description || 'Продажа оформлена вручную', admin_comment: '',
     phone: '', address: 'Продажа оформлена вручную (без доставки)',
     created_at: now, completed_at: now
@@ -404,7 +418,12 @@ function updateOrder(id, { items, address, comment }) {
   data.order_items = data.order_items.filter(i => i.order_id !== order.id);
   const items_ = resolved.resolvedItems.map(i => ({ id: nextId('order_items'), order_id: order.id, ...i }));
   data.order_items.push(...items_);
+
   order.total = resolved.total;
+  order.delivery_cost = getDeliveryCost(resolved.total);
+  const afterBirthday = resolved.total - (order.birthday_discount_amount || 0);
+  order.paid_amount = afterBirthday - (order.bonus_redeemed || 0);
+  order.payable_total = order.paid_amount + order.delivery_cost;
   if (address !== undefined) order.address = address;
   if (comment !== undefined) order.comment = comment;
   persist();
@@ -463,7 +482,7 @@ function moveToCompleted(id) {
   order.completed_at = new Date().toISOString();
   awardCashback(order);
   awardReferral(order);
-  addLedgerEntry({ type: 'income', amount: order.total, description: `Заказ №${order.id}`, date: order.completed_at, auto: true, order_id: order.id });
+  addLedgerEntry({ type: 'income', amount: order.payable_total != null ? order.payable_total : order.total, description: `Заказ №${order.id}`, date: order.completed_at, auto: true, order_id: order.id });
   persist();
   return { order: attachItems(order) };
 }
@@ -549,7 +568,7 @@ function getBonusHistory(user_id) {
 
 const TX_LABELS = {
   cashback: 'Кэшбек', referral: 'Бонус за реферала', referral_ladder: 'Реферальная лесенка',
-  redeem: 'Списание на заказ', refund: 'Возврат за отменённый заказ'
+  redeem: 'Списание на заказ', refund: 'Возврат за отменённый заказ', signup: 'Бонус за регистрацию'
 };
 
 // ---------- Бонусная программа: уровни кэшбека ----------
@@ -740,5 +759,6 @@ module.exports = {
   countActiveOrders, MAX_ACTIVE_ORDERS,
   addLedgerEntry, getLedger, deleteLedgerEntry, getBalance, getShopStats,
   getBonusInfo, getBonusBalance, getBonusHistory, redeemBonuses, TX_LABELS,
-  getBirthdayDiscountInfo, REFERRAL_RATE, REFERRAL_QUALIFY_MIN, REFERRAL_LADDER, MAX_BONUS_PAYMENT_SHARE
+  getBirthdayDiscountInfo, REFERRAL_RATE, REFERRAL_QUALIFY_MIN, REFERRAL_LADDER, MAX_BONUS_PAYMENT_SHARE,
+  getDeliveryCost, DELIVERY_TIERS
 };

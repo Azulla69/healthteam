@@ -90,7 +90,6 @@ async function loadInitialData() {
   } catch (e) { /* гость */ }
   await loadProducts();
   render();
-  if (state.user && !onboardingComplete(state.user)) openOnboardingModal();
 }
 
 function openOnboardingModal() {
@@ -422,10 +421,11 @@ function renderCart() {
   const bday = state.user && state.user.birthdayDiscount;
   const birthdayEligible = bday && bday.eligible;
   const afterBirthday = (state.checkoutUseBirthday && birthdayEligible) ? Math.round(total * (1 - bday.rate)) : total;
+  const deliveryCost = total < 500 ? 300 : total < 1000 ? 200 : total < 1500 ? 100 : 0;
   const bonusBalance = state.user ? state.user.bonus.balance : 0;
   const maxBonus = Math.min(bonusBalance, Math.floor(afterBirthday * 0.5));
   const bonusUsed = Math.min(state.checkoutUseBonus, maxBonus);
-  const payable = afterBirthday - bonusUsed;
+  const payable = afterBirthday - bonusUsed + deliveryCost;
 
   return `
     <div class="topbar-centered"><h1>Корзина</h1></div>
@@ -469,6 +469,10 @@ function renderCart() {
         </div>
         ${state.checkoutUseBirthday && birthdayEligible ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Скидка ДР</span><span>−${total - afterBirthday} ₽</span></div>` : ''}
         ${bonusUsed > 0 ? `<div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)"><span>Бонусами</span><span>−${bonusUsed} ₽</span></div>` : ''}
+        <div class="row-between" style="margin:4px 0;font-size:13px;color:var(--ink-soft)">
+          <span>Доставка${deliveryCost === 0 ? ' 🎉' : ''}</span><span>${deliveryCost === 0 ? 'Бесплатно' : deliveryCost + ' ₽'}</span>
+        </div>
+        ${deliveryCost > 0 ? `<div style="font-size:11px;color:var(--ink-soft);margin-bottom:4px">Бесплатная доставка от 1500 ₽ товаров</div>` : ''}
         <div class="row-between" style="margin:8px 0 16px;">
           <strong>К оплате</strong>
           <span class="price-tag">${payable} ₽</span>
@@ -508,7 +512,7 @@ function renderOrders() {
               <span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span>
             </div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <div class="row-between"><span class="price-tag">${o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
+            <div class="row-between"><span class="price-tag">${o.payable_total ?? o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
           </div>
         `).join('')
       }
@@ -545,7 +549,7 @@ function openOrderDetailModal(order) {
         <h3>Заказ №${order.id}</h3>
         <span class="status-badge status-${order.status}">${STATUS_LABELS[order.status]}</span>
         ${orderItemsHtml(order)}
-        <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${order.total} ₽</span></div>
+        <div class="row-between" style="margin:12px 0"><strong>Итого к оплате</strong><span class="price-tag">${order.payable_total ?? order.total} ₽</span></div>
         <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${order.address || '—'}</div></div>
         ${order.comment ? `<div class="field"><label>Комментарий</label><div style="font-size:14px">${order.comment}</div></div>` : ''}
         ${order.status === 'new' || order.status === 'processing' ? `
@@ -743,7 +747,7 @@ async function openPurchaseHistoryModal() {
           <div class="list-item">
             <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
             <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <div class="row-between"><span class="price-tag">${o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
+            <div class="row-between"><span class="price-tag">${o.payable_total ?? o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
           </div>
         `).join('')
       }
@@ -909,7 +913,7 @@ function renderManageOrders() {
             </div>
             <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'} · ${o.phone || '—'}</div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
-            <div class="row-between"><span class="price-tag">${o.total} ₽</span></div>
+            <div class="row-between"><span class="price-tag">${o.payable_total ?? o.total} ₽</span></div>
           </div>
         `).join('')
       }
@@ -954,7 +958,7 @@ function openManageOrderDetailModal(order) {
         <div class="field" style="margin-top:10px"><label>Покупатель</label><div style="font-size:14px">${order.first_name || ''} ${order.last_name || ''} · @${order.username || '—'} (id ${order.telegram_id})</div></div>
         <div class="field"><label>Телефон</label><div style="font-size:14px">${order.phone || '—'}</div></div>
         ${orderItemsHtml(order)}
-        <div class="row-between" style="margin:12px 0"><strong>Сумма</strong><span class="price-tag">${order.total} ₽</span></div>
+        <div class="row-between" style="margin:12px 0"><strong>Итого к оплате</strong><span class="price-tag">${order.payable_total ?? order.total} ₽</span></div>
         <div class="field"><label>Адрес доставки</label><div style="font-size:14px">${order.address || '—'}</div></div>
         <div class="field"><label>Комментарий покупателя</label><div style="font-size:14px">${order.comment || '—'}</div></div>
         ${actionsHtml}
@@ -1052,7 +1056,7 @@ async function openUserDetailModal(userId) {
               <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
               <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
               <div class="row-between">
-                <span class="price-tag">${o.total} ₽</span>
+                <span class="price-tag">${o.payable_total ?? o.total} ₽</span>
                 <button class="btn btn-danger" style="padding:6px 12px;font-size:12px" data-delete-user-order="${o.id}">Удалить</button>
               </div>
             </div>
