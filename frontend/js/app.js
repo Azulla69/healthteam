@@ -185,7 +185,7 @@ function renderServices() {
     { id: 'referral', emoji: '🤝', name: 'Реферальная система', desc: 'Приглашайте друзей' },
   ];
   return `
-    <div class="topbar"><div><div class="eyebrow">Добро пожаловать</div><h1>HealthTeam</h1></div></div>
+    <div class="topbar-centered"><h1>HealthTeam</h1></div>
     <div class="manage-menu" style="padding-top:4px">
       ${tiles.map(t => `
         <div class="manage-menu-tile service-tile" data-service="${t.id}">
@@ -200,8 +200,8 @@ function renderServices() {
 
 function renderConsultantStub() {
   return `
-    <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Бот-консультант</h1></div></div>
-    <div class="back-row" data-action="back-to-services">← Сервисы</div>
+    <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+    <div class="topbar-centered"><h1>Бот-консультант</h1></div>
     <div class="empty-state">
       <h3>🧬 Скоро здесь появится подбор добавок</h3>
       <p>Расскажет, что подойдёт именно вам — по роду занятий, росту, весу и целям. Раздел в разработке, совсем скоро запустим.</p>
@@ -212,8 +212,8 @@ function renderConsultantStub() {
 function renderBonusInfoPage() {
   const bonus = state.user ? state.user.bonus : null;
   return `
-    <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Бонусная система</h1></div></div>
-    <div class="back-row" data-action="back-to-services">← Сервисы</div>
+    <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+    <div class="topbar-centered"><h1>Бонусная система</h1></div>
     <div class="section" style="padding-top:0">
       ${bonus ? renderBonusCard(bonus, false) : ''}
       ${state.user ? `<button class="btn btn-ghost btn-block" data-action="open-bonus-history" style="margin-bottom:16px">📜 История начислений и списаний</button>` : ''}
@@ -244,15 +244,15 @@ function renderReferralPage() {
   const ref = state.user ? state.user.referral : null;
   if (!ref) {
     return `
-      <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Реферальная система</h1></div></div>
-      <div class="back-row" data-action="back-to-services">← Сервисы</div>
+      <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+      <div class="topbar-centered"><h1>Реферальная система</h1></div>
       <div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>
     `;
   }
   const link = state.botUsername ? `https://t.me/${state.botUsername}?startapp=${ref.code}` : `(укажите BOT_USERNAME в настройках сервера)`;
   return `
-    <div class="topbar"><div><div class="eyebrow">Сервисы</div><h1>Реферальная система</h1></div></div>
-    <div class="back-row" data-action="back-to-services">← Сервисы</div>
+    <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+    <div class="topbar-centered"><h1>Реферальная система</h1></div>
     <div class="section" style="padding-top:0">
       <div class="bonus-card">
         <div class="bonus-tier-name">🤝 Приглашайте друзей</div>
@@ -294,8 +294,7 @@ function renderCatalog() {
     const sections = [...new Set(products.map(p => p.section).filter(Boolean))]
       .sort((a, b) => SECTION_ORDER.indexOf(a) - SECTION_ORDER.indexOf(b));
     return `
-      <div class="topbar"><div><div class="eyebrow">Каталог товаров</div><h1>HealthTeam</h1></div></div>
-      <div class="back-row" data-action="back-to-services">← Сервисы</div>
+      <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
       <div class="section-tiles">
         ${sections.map(s => `
           <div class="section-tile" data-section="${s}">
@@ -308,12 +307,10 @@ function renderCatalog() {
     `;
   }
 
-  // Сразу список всех товаров раздела + поиск по названию + фильтр по подразделу/производителю
+  // Сразу список всех товаров раздела + поиск по названию + фильтр по производителю
   let list = products.filter(p => p.section === state.selectedSection);
-  const categories = [...new Set(list.map(p => p.category).filter(Boolean))];
   const brands = [...new Set(list.map(p => p.brand).filter(Boolean))].sort();
 
-  if (state.selectedSubcategory) list = list.filter(p => p.category === state.selectedSubcategory);
   if (state.selectedBrand) list = list.filter(p => p.brand === state.selectedBrand);
   if (state.searchQuery.trim()) {
     const q = state.searchQuery.trim().toLowerCase();
@@ -324,15 +321,10 @@ function renderCatalog() {
   else if (state.sortBy === 'price_desc') list = [...list].sort((a, b) => b.price - a.price);
 
   return `
-    <div class="topbar"><div><div class="eyebrow">${state.selectedSection}</div><h1>Каталог</h1></div></div>
-    <div class="back-row" data-action="back-to-sections">← Все разделы</div>
+    <div class="back-row-lg"><button data-action="back-to-sections">← ${state.selectedSection}</button></div>
     <div class="section" style="padding-top:0">
       <div class="field" style="margin-bottom:8px">
         <input id="catalog-search" placeholder="Поиск по названию..." value="${state.searchQuery}" />
-      </div>
-      <div class="chips" style="padding:0 0 10px">
-        <div class="chip ${!state.selectedSubcategory ? 'active' : ''}" data-cat="__all__">Все</div>
-        ${categories.map(c => `<div class="chip ${state.selectedSubcategory === c ? 'active' : ''}" data-cat="${c}">${c}</div>`).join('')}
       </div>
       <div class="sort-row" style="justify-content:space-between">
         <select data-action="brand-select">
@@ -436,7 +428,7 @@ function renderCart() {
   const payable = afterBirthday - bonusUsed;
 
   return `
-    <div class="topbar"><div><div class="eyebrow">Оформление</div><h1>Корзина</h1></div></div>
+    <div class="topbar-centered"><h1>Корзина</h1></div>
     <div class="section">
       ${items.length === 0 ? `<div class="empty-state"><h3>Корзина пуста</h3><p>Добавьте товары из каталога</p></div>` : `
         <div class="list-item">
@@ -661,12 +653,12 @@ function avatarEmojiFor(telegramId) {
 
 function renderProfile() {
   if (!state.user) {
-    return `<div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div><div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>`;
+    return `<div class="topbar-centered"><h1>Профиль</h1></div><div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>`;
   }
   const avatar = avatarEmojiFor(state.user.telegram_id);
 
   return `
-    <div class="topbar"><div><div class="eyebrow">Личный кабинет</div><h1>Профиль</h1></div></div>
+    <div class="topbar-centered"><h1>Профиль</h1></div>
     <div class="profile-header">
       <div class="profile-header-inner">
         <div class="avatar-lg">${avatar}</div>
@@ -1483,9 +1475,6 @@ function attachEvents() {
       state.sortBy = 'default';
       render();
     };
-  });
-  app.querySelectorAll('[data-cat]').forEach(item => {
-    item.onclick = () => { state.selectedSubcategory = item.dataset.cat === '__all__' ? null : item.dataset.cat; render(); };
   });
   const backToSections = app.querySelector('[data-action="back-to-sections"]');
   if (backToSections) backToSections.onclick = () => { state.catalogStep = 'sections'; state.selectedSection = null; render(); };

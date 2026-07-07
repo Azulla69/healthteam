@@ -734,3 +734,33 @@ img.thumb { width: 44px; height: 44px; }
 .btn-primary { box-shadow: 0 4px 14px rgba(18, 23, 26, 0.18); }
 .btn-amber { box-shadow: 0 4px 14px rgba(19, 135, 108, 0.30); }
 .section-tile { box-shadow: 0 8px 22px rgba(18, 23, 26, 0.22); }
+
+/* ---- Центрированный заголовок (без хлебных крошек) ---- */
+.topbar-centered {
+  position: sticky; top: 0; z-index: 11;
+  background: linear-gradient(180deg, var(--bg) 85%, transparent);
+  backdrop-filter: blur(6px);
+  padding: 18px 16px 10px;
+  text-align: center;
+}
+.topbar-centered h1 { font-size: 22px; color: var(--forest-dark); }
+
+.back-row-lg {
+  position: sticky; top: 0; z-index: 11;
+  background: linear-gradient(180deg, var(--bg) 85%, transparent);
+  backdrop-filter: blur(6px);
+  padding: 16px;
+  display: flex;
+}
+.back-row-lg button {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 14px;
+  padding: 12px 18px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--forest-dark);
+  cursor: pointer;
+}
