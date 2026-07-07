@@ -387,15 +387,19 @@ function getOrderRaw(id) { return data.orders.find(o => o.id === Number(id)); }
 
 // Ручное оформление продажи админом (товар продан не через бота) — сразу "Выполнено",
 // списывает склад и добавляет сумму в бухгалтерию + начисляет кэшбек, как обычный заказ
-function createManualOrder({ user_id, items, description }) {
+function createManualOrder({ user_id, items, description, discount }) {
   const resolved = resolveItems(items);
   if (resolved.error) return resolved;
   if (resolved.resolvedItems.length === 0) return { error: 'no_valid_items' };
 
+  const discountAmount = Math.max(0, Math.min(Number(discount) || 0, resolved.total));
+  const paidAmount = resolved.total - discountAmount;
+
   const now = new Date().toISOString();
   const order = {
     id: nextId('orders'), user_id, status: 'completed', paid: true,
-    total: resolved.total, paid_amount: resolved.total, payable_total: resolved.total, delivery_cost: 0, bonus_redeemed: 0, birthday_discount_applied: false, birthday_discount_amount: 0,
+    total: resolved.total, manual_discount: discountAmount,
+    paid_amount: paidAmount, payable_total: paidAmount, delivery_cost: 0, bonus_redeemed: 0, birthday_discount_applied: false, birthday_discount_amount: 0,
     comment: description || 'Продажа оформлена вручную', admin_comment: '',
     phone: '', address: 'Продажа оформлена вручную (без доставки)',
     created_at: now, completed_at: now
@@ -407,7 +411,7 @@ function createManualOrder({ user_id, items, description }) {
   resolved.resolvedItems.forEach(i => removeStock(i.product_id, i.qty));
   awardCashback(order);
   awardReferral(order);
-  addLedgerEntry({ type: 'income', amount: order.total, description: `Заказ №${order.id} (вручную)`, date: now, auto: true, order_id: order.id });
+  addLedgerEntry({ type: 'income', amount: paidAmount, description: `Заказ №${order.id} (вручную)${discountAmount ? `, скидка ${discountAmount}₽` : ''}`, date: now, auto: true, order_id: order.id });
   persist();
   return { order: attachItems(order) };
 }

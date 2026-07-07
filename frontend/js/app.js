@@ -1222,6 +1222,8 @@ function openManualOrderModal(user, onDone) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const picked = {}; // product_id -> qty
+  let descriptionValue = '';
+  let discountValue = 0;
 
   function total() {
     return Object.entries(picked).reduce((sum, [id, qty]) => {
@@ -1232,6 +1234,7 @@ function openManualOrderModal(user, onDone) {
 
   function draw(filter = '') {
     const filtered = state.products.filter(p => p.active && p.name.toLowerCase().includes(filter.toLowerCase()));
+    const subtotal = total();
     backdrop.innerHTML = `
       <div class="modal-sheet">
         <h3>Добавить выполненный заказ</h3>
@@ -1249,25 +1252,35 @@ function openManualOrderModal(user, onDone) {
             </div>
           `).join('') || `<div style="font-size:13px;color:var(--ink-soft);padding:10px 0">Ничего не найдено</div>`}
         </div>
-        <div class="row-between" style="margin:12px 0"><strong>Итого</strong><span class="price-tag">${total()} ₽</span></div>
-        <div class="field"><label>Описание (необязательно)</label><input id="mo-description" placeholder="напр. Продано лично в зале" /></div>
+        <div class="row-between" style="margin:12px 0"><strong>Сумма товаров</strong><span class="price-tag">${subtotal} ₽</span></div>
+        <div class="field"><label>Скидка, ₽ (если давали покупателю)</label><input id="mo-discount" type="number" min="0" max="${subtotal}" value="${discountValue}" /></div>
+        <div class="row-between" style="margin-bottom:12px"><strong>Итого к учёту</strong><span class="price-tag">${Math.max(0, subtotal - discountValue)} ₽</span></div>
+        <div class="field"><label>Описание (необязательно)</label><input id="mo-description" placeholder="напр. Продано лично в зале" value="${descriptionValue}" /></div>
         <button class="btn btn-primary btn-block" id="mo-submit">Оформить</button>
         <button class="btn btn-ghost btn-block" id="mo-cancel-modal" style="margin-top:8px">Отмена</button>
       </div>
     `;
-    backdrop.querySelector('#mo-search').oninput = (e) => draw(e.target.value);
-    backdrop.querySelector('#mo-search').focus();
+    const searchInput = backdrop.querySelector('#mo-search');
+    searchInput.oninput = (e) => draw(e.target.value);
+    searchInput.focus();
+    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+
+    backdrop.querySelector('#mo-description').oninput = (e) => { descriptionValue = e.target.value; };
+    backdrop.querySelector('#mo-discount').oninput = (e) => {
+      discountValue = Math.max(0, Math.min(Number(e.target.value) || 0, subtotal));
+    };
+
     backdrop.querySelectorAll('[data-mo-inc]').forEach(btn => {
       btn.onclick = () => {
         const id = btn.dataset.moInc;
         const p = state.products.find(pr => pr.id === Number(id));
-        if ((picked[id] || 0) < p.stock) { picked[id] = (picked[id] || 0) + 1; draw(backdrop.querySelector('#mo-search').value); }
+        if ((picked[id] || 0) < p.stock) { picked[id] = (picked[id] || 0) + 1; draw(filter); }
       };
     });
     backdrop.querySelectorAll('[data-mo-dec]').forEach(btn => {
       btn.onclick = () => {
         const id = btn.dataset.moDec;
-        if (picked[id] > 0) { picked[id]--; if (picked[id] === 0) delete picked[id]; draw(backdrop.querySelector('#mo-search').value); }
+        if (picked[id] > 0) { picked[id]--; if (picked[id] === 0) delete picked[id]; draw(filter); }
       };
     });
     backdrop.querySelector('#mo-cancel-modal').onclick = () => backdrop.remove();
@@ -1275,9 +1288,8 @@ function openManualOrderModal(user, onDone) {
       const items = Object.entries(picked).map(([id, qty]) => ({ product_id: Number(id), qty }));
       if (items.length === 0) { toast('Выберите хотя бы один товар'); return; }
       if (!confirm('Оформить выполненный заказ вручную?')) return;
-      const description = document.getElementById('mo-description').value.trim();
       try {
-        await api(`/api/users/${user.id}/manual-order`, { method: 'POST', body: { items, description } });
+        await api(`/api/users/${user.id}/manual-order`, { method: 'POST', body: { items, description: descriptionValue.trim(), discount: discountValue } });
         backdrop.remove();
         toast('Заказ добавлен');
         await loadProducts();
