@@ -157,13 +157,12 @@ function render() {
 }
 
 function renderTabbar() {
-  const tabs = effectiveAdmin()
-    ? [{ id: 'manage', label: 'Управление', icon: '⚙️' }]
-    : [
-        { id: 'services', label: 'Сервисы', icon: '✨' },
-        { id: 'cart', label: 'Корзина', icon: '🛒', badge: cartCount() },
-        { id: 'profile', label: 'Профиль', icon: '👤' },
-      ];
+  const tabs = [
+    { id: 'services', label: 'Сервисы', icon: '✨' },
+    { id: 'cart', label: 'Корзина', icon: '🛒', badge: cartCount() },
+    { id: 'profile', label: 'Профиль', icon: '👤' },
+  ];
+  if (effectiveAdmin()) tabs.push({ id: 'manage', label: 'Управление', icon: '⚙️' });
 
   return `
     <div class="tabbar">
@@ -831,6 +830,9 @@ function renderManage() {
             <div class="name">${t.label}</div>
           </div>
         `).join('')}
+      </div>
+      <div class="section" style="padding-top:0">
+        <button class="btn btn-ghost btn-block" data-action="exit-admin-mode">🚪 Выйти из режима администратора</button>
       </div>
     `;
   }
@@ -1576,8 +1578,17 @@ function attachEvents() {
   if (toggleModeBtn) {
     toggleModeBtn.onclick = () => {
       state.viewAsClient = !state.viewAsClient;
-      state.view = 'catalog'; state.catalogStep = 'sections';
+      state.view = 'services';
       toast(state.viewAsClient ? 'Режим клиента включён' : 'Режим администратора включён');
+      render();
+    };
+  }
+  const exitAdminBtn = app.querySelector('[data-action="exit-admin-mode"]');
+  if (exitAdminBtn) {
+    exitAdminBtn.onclick = () => {
+      state.viewAsClient = true;
+      state.view = 'services';
+      toast('Вы вышли из режима администратора — теперь видно как обычному клиенту');
       render();
     };
   }
