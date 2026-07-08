@@ -1861,7 +1861,14 @@ function attachEvents() {
   const consultantCheckbox = app.querySelector('#use-consultant');
   if (consultantCheckbox) consultantCheckbox.onchange = () => { state.checkoutUseConsultant = consultantCheckbox.checked; render(); };
   const bonusInput = app.querySelector('#use-bonus');
-  if (bonusInput) bonusInput.oninput = () => { state.checkoutUseBonus = Number(bonusInput.value) || 0; render(); };
+  if (bonusInput) {
+    bonusInput.oninput = () => {
+      state.checkoutUseBonus = Number(bonusInput.value) || 0;
+      render();
+      const el = document.getElementById('use-bonus');
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    };
+  }
 
   const checkoutBtn = app.querySelector('[data-action="checkout"]');
   if (checkoutBtn) {

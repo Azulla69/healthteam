@@ -23,7 +23,16 @@ router.post('/:id/manual-order', requireAdmin, (req, res) => {
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'empty_items' });
   const result = db.createManualOrder({ user_id: user.id, items, description, discount });
   if (result.error) return res.status(400).json(result);
-  res.status(201).json(result.order);
+
+  const order = result.order;
+  db.addNotification(
+    user.id, 'Заказ выполнен 🎉',
+    `Заказ №${order.id} оформлен. Оцените заказ и получите 50 бонусов!`,
+    { type: 'review_prompt', order_id: order.id }
+  );
+  require('../bot').notifyOrderCompleted(user.telegram_id, order.id).catch(() => {});
+
+  res.status(201).json(order);
 });
 
 module.exports = router;
