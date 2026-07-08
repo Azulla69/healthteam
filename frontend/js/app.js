@@ -1216,6 +1216,8 @@ function openManageOrderDetailModal(order) {
           <span style="font-size:13px;color:var(--ink-soft)">Оплата</span>
           ${order.paid ? `<span class="paid-badge">Оплачено</span>` : `<button class="btn btn-ghost" id="mo-paid">Отметить оплаченным</button>`}
         </div>
+        <button class="btn btn-danger btn-block" id="mo-delete-completed" style="margin-top:12px">Удалить заказ</button>
+        <div style="font-size:11px;color:var(--ink-soft);margin-top:6px">Товар вернётся на склад, начисленные бонусы и сумма в бухгалтерии за этот заказ будут отменены</div>
       `;
     }
 
@@ -1278,6 +1280,16 @@ function openManageOrderDetailModal(order) {
         toast('Заказ отменён, товар возвращён на склад');
         await loadOrders(); render();
       } catch (e) { toast('Не удалось отменить заказ'); }
+    };
+    const deleteCompletedBtn = backdrop.querySelector('#mo-delete-completed');
+    if (deleteCompletedBtn) deleteCompletedBtn.onclick = async () => {
+      if (!confirm('Удалить этот выполненный заказ? Товар вернётся на склад, бонусы и сумма в бухгалтерии за него будут отменены.')) return;
+      try {
+        await api(`/api/orders/${order.id}`, { method: 'DELETE' });
+        backdrop.remove();
+        toast('Заказ удалён, склад и бухгалтерия скорректированы');
+        await loadOrders(); render();
+      } catch (e) { toast('Не удалось удалить заказ'); }
     };
   }
   draw();

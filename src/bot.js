@@ -51,6 +51,21 @@ async function notifyOrderCompleted(telegramId, orderId) {
   await sendRaw(telegramId, text, replyMarkup);
 }
 
+// Уведомляет всех админов (ADMIN_IDS) о новом заказе
+async function notifyAdminsNewOrder(order, buyer) {
+  const adminIds = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (adminIds.length === 0) return;
+  const itemsList = (order.items || []).map(i => `• ${i.name} × ${i.qty}`).join('\n');
+  const text = `🛒 <b>Новый заказ №${order.id}</b>\n\n` +
+    `${buyer.first_name || ''} ${buyer.last_name || ''} · @${buyer.username || '—'}\n` +
+    `Телефон: ${order.phone || '—'}\n\n${itemsList}\n\n` +
+    `Сумма: ${order.total} ₽`;
+  const replyMarkup = WEBAPP_URL ? { inline_keyboard: [[{ text: '📋 Открыть управление', web_app: { url: WEBAPP_URL } }]] } : undefined;
+  for (const adminId of adminIds) {
+    await sendRaw(adminId, text, replyMarkup);
+  }
+}
+
 let offset = 0;
 let stopped = false;
 
@@ -88,4 +103,4 @@ function startBot() {
 
 function stopBot() { stopped = true; }
 
-module.exports = { startBot, stopBot, notifyOrderCompleted };
+module.exports = { startBot, stopBot, notifyOrderCompleted, notifyAdminsNewOrder };

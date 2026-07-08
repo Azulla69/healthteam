@@ -22,6 +22,7 @@ router.post('/', requireAuth, (req, res) => {
     use_bonus, use_birthday_discount, use_consultant_discount
   });
   if (result.error) return errorResponse(res, result);
+  require('../bot').notifyAdminsNewOrder(result.order, req.user).catch(() => {});
   res.status(201).json(result.order);
 });
 
