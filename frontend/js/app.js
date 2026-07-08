@@ -15,7 +15,7 @@ const state = {
   checkoutUseConsultant: false,
 
   consultantStep: 'intro',
-  consultantAnswers: {},
+  consultantChat: { messages: [], loading: false, error: false },
   consultantProducts: [],
   consultantSelected: {},
   consultantEligibleIds: [], // товары из последней подборки — для показа чекбокса скидки в корзине
@@ -213,37 +213,39 @@ function renderServices() {
   `;
 }
 
-// ================= БОТ-КОНСУЛЬТАНТ =================
-const CONSULTANT_ACTIVITY_OPTIONS = ['Сидячая офисная работа', 'Физическая работа', 'Тренируюсь в зале 3+ раз в неделю', 'Профессиональный спорт'];
-const CONSULTANT_GOAL_OPTIONS = ['Похудение', 'Набор мышечной массы', 'Поддержание формы и здоровье', 'Выносливость и энергия'];
+// ================= БОТ-КОНСУЛЬТАНТ (живой чат с ИИ) =================
+const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([\d,\s]+)\]\]/i;
 
-function getConsultantTags(answers) {
-  const tags = [];
-  const h = Number(answers.height), w = Number(answers.weight);
-  const bmi = h > 0 ? w / Math.pow(h / 100, 2) : 22;
+async function sendConsultantChat() {
+  try {
+    const payload = state.consultantChat.messages.map(m => ({ role: m.role, content: m.content }));
+    const data = await api('/api/consultant/chat', { method: 'POST', body: { messages: payload } });
+    let reply = data.reply || '';
+    const match = reply.match(CONSULTANT_MARKER_RE);
+    let recommendedIds = null;
+    if (match) {
+      recommendedIds = match[1].split(',').map(s => Number(s.trim())).filter(Boolean);
+      reply = reply.replace(CONSULTANT_MARKER_RE, '').trim();
+    }
+    state.consultantChat.messages.push({ role: 'assistant', content: reply });
+    state.consultantChat.loading = false;
+    render();
+    document.getElementById('chat-messages')?.scrollTo(0, 999999);
 
-  if (answers.goal === 'Похудение' || bmi >= 27) tags.push('жиросжигател');
-  if (answers.goal === 'Набор мышечной массы' || bmi < 18.5) { tags.push('гейнер'); tags.push('масс'); }
-  if (answers.goal === 'Выносливость и энергия') { tags.push('энергетик'); tags.push('кофеин'); tags.push('предтренир'); }
-  if (answers.goal === 'Поддержание формы и здоровье') { tags.push('омега'); }
-  if (answers.activity === 'Сидячая офисная работа') tags.push('коллаген');
-  if (answers.activity === 'Тренируюсь в зале 3+ раз в неделю' || answers.activity === 'Профессиональный спорт') tags.push('предтренир');
-  tags.push('витамин'); // базовая поддержка — всегда актуальна
-  return [...new Set(tags)];
-}
-
-function pickConsultantProducts(tags) {
-  const active = state.products.filter(p => p.active && p.stock > 0);
-  const picked = []; const usedIds = new Set();
-  tags.forEach(tag => {
-    const match = active.find(p => !usedIds.has(p.id) && (
-      (p.category || '').toLowerCase().includes(tag) ||
-      (p.name || '').toLowerCase().includes(tag) ||
-      (p.description || '').toLowerCase().includes(tag)
-    ));
-    if (match) { picked.push(match); usedIds.add(match.id); }
-  });
-  return picked.slice(0, 6);
+    if (recommendedIds && recommendedIds.length > 0) {
+      const products = recommendedIds.map(id => state.products.find(p => p.id === id)).filter(Boolean);
+      if (products.length > 0) {
+        state.consultantProducts = products;
+        state.consultantSelected = {};
+        setTimeout(() => { state.consultantStep = 'result'; render(); }, 1200);
+      }
+    }
+  } catch (e) {
+    state.consultantChat.loading = false;
+    state.consultantChat.error = true;
+    if (e.message === 'ai_not_configured') toast('ИИ-консультант временно недоступен — уточните у администратора');
+    render();
+  }
 }
 
 function renderConsultantStub() {
@@ -256,42 +258,25 @@ function renderConsultantStub() {
   if (step === 'intro') {
     return header + `
       <div class="empty-state">
-        <h3>🧬 Подберём БАДы и спортпит под вас</h3>
-        <p>Ответьте на 4 коротких вопроса — соберём набор из нашего каталога специально под ваши цели, и подарим на него скидку 10%.</p>
-        <button class="btn btn-primary" data-action="consultant-start" style="margin-top:10px">Начать подбор</button>
+        <h3>🧬 Живой ИИ-консультант</h3>
+        <p>Расскажите о себе в чате — чем занимаетесь, какие цели, каким спортом занимаетесь — и получите персональную рекомендацию из нашего каталога со скидкой 10%.</p>
+        <button class="btn btn-primary" data-action="consultant-start" style="margin-top:10px">Начать разговор</button>
       </div>
     `;
   }
 
-  if (step === 'activity') {
+  if (step === 'chat') {
+    const chat = state.consultantChat;
     return header + `
       <div class="section" style="padding-top:0">
-        <h3 style="margin-bottom:12px">Чем вы занимаетесь по жизни?</h3>
-        <div class="manage-actions-list">
-          ${CONSULTANT_ACTIVITY_OPTIONS.map(o => `<button class="manage-action-btn" data-consultant-answer="activity" data-value="${o}">${o}</button>`).join('')}
+        <div id="chat-messages" class="chat-messages">
+          ${chat.messages.filter(m => !m.hidden).map(m => `<div class="chat-bubble ${m.role}">${m.content}</div>`).join('')}
+          ${chat.loading ? `<div class="chat-bubble assistant chat-typing">Печатает…</div>` : ''}
+          ${chat.error ? `<div class="chat-bubble assistant" style="color:var(--danger)">Не удалось получить ответ. Попробуйте ещё раз.</div>` : ''}
         </div>
-      </div>
-    `;
-  }
-
-  if (step === 'goal') {
-    return header + `
-      <div class="section" style="padding-top:0">
-        <h3 style="margin-bottom:12px">Какая у вас цель?</h3>
-        <div class="manage-actions-list">
-          ${CONSULTANT_GOAL_OPTIONS.map(o => `<button class="manage-action-btn" data-consultant-answer="goal" data-value="${o}">${o}</button>`).join('')}
-        </div>
-      </div>
-    `;
-  }
-
-  if (step === 'height' || step === 'weight') {
-    const isHeight = step === 'height';
-    return header + `
-      <div class="section" style="padding-top:0">
-        <h3 style="margin-bottom:12px">${isHeight ? 'Ваш рост, см' : 'Ваш вес, кг'}</h3>
-        <div class="field"><input id="consultant-input" type="number" placeholder="${isHeight ? 'напр. 175' : 'напр. 70'}" /></div>
-        <button class="btn btn-primary btn-block" data-action="consultant-next-numeric" data-field="${step}">Далее</button>
+        <div class="field"><input id="consultant-chat-input" placeholder="Напишите ответ..." ${chat.loading ? 'disabled' : ''} /></div>
+        <button class="btn btn-primary btn-block" id="consultant-chat-send" ${chat.loading ? 'disabled' : ''}>Отправить</button>
+        <button class="btn btn-ghost btn-block" data-action="consultant-restart" style="margin-top:8px">Начать заново</button>
       </div>
     `;
   }
@@ -303,8 +288,8 @@ function renderConsultantStub() {
     const discounted = Math.round(subtotal * 0.9);
     return header + `
       <div class="section" style="padding-top:0">
-        <h3 style="margin-bottom:6px">Ваша персональная подборка</h3>
-        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Судя по вашим ответам (${state.consultantAnswers.activity}, цель — «${state.consultantAnswers.goal}»), рекомендуем начать с этого набора. Снимите галочку, если что-то не нужно.</p>
+        <h3 style="margin-bottom:6px">Персональная подборка от консультанта</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Снимите галочку, если что-то не нужно.</p>
         ${products.length === 0 ? `<div class="empty-state"><h3>Не нашли подходящих товаров</h3><p>Возможно, каталог сейчас пуст в нужных категориях — загляните позже.</p></div>` :
           products.map(p => `
             <div class="manage-row">
@@ -322,7 +307,7 @@ function renderConsultantStub() {
           <div class="row-between" style="margin-bottom:14px"><strong>Со скидкой 10%</strong><span class="price-tag">${discounted} ₽</span></div>
           <button class="btn btn-amber btn-block" data-action="consultant-add-to-cart">Добавить в корзину со скидкой 10%</button>
         ` : ''}
-        <button class="btn btn-ghost btn-block" data-action="consultant-restart" style="margin-top:8px">Пройти заново</button>
+        <button class="btn btn-ghost btn-block" data-action="consultant-restart" style="margin-top:8px">Начать заново</button>
       </div>
     `;
   }
@@ -1743,7 +1728,7 @@ function attachEvents() {
     tile.onclick = async () => {
       state.view = tile.dataset.service;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
-      if (state.view === 'consultant') { state.consultantStep = 'intro'; state.consultantAnswers = {}; state.consultantSelected = {}; }
+      if (state.view === 'consultant') { state.consultantStep = 'intro'; state.consultantChat = { messages: [], loading: false, error: false }; state.consultantSelected = {}; }
       if (state.view === 'reviews') { await loadReviews(1); }
       render();
     };
@@ -1752,34 +1737,33 @@ function attachEvents() {
   const bonusInfoLink = app.querySelector('[data-action="go-to-bonus-info"]');
   if (bonusInfoLink) bonusInfoLink.onclick = () => { state.view = 'bonusInfo'; render(); };
 
-  // Бот-консультант
+  // Бот-консультант (живой чат с ИИ)
   const consultantStartBtn = app.querySelector('[data-action="consultant-start"]');
-  if (consultantStartBtn) consultantStartBtn.onclick = () => { state.consultantStep = 'activity'; render(); };
-  app.querySelectorAll('[data-consultant-answer]').forEach(btn => {
-    btn.onclick = () => {
-      const field = btn.dataset.consultantAnswer;
-      state.consultantAnswers[field] = btn.dataset.value;
-      state.consultantStep = field === 'activity' ? 'goal' : 'height';
+  if (consultantStartBtn) {
+    consultantStartBtn.onclick = async () => {
+      state.consultantStep = 'chat';
+      state.consultantChat = { messages: [{ role: 'user', content: 'Здравствуйте! Помогите подобрать БАДы и спортпит под меня.', hidden: true }], loading: true, error: false };
       render();
-    };
-  });
-  const consultantNextBtn = app.querySelector('[data-action="consultant-next-numeric"]');
-  if (consultantNextBtn) {
-    consultantNextBtn.onclick = async () => {
-      const field = consultantNextBtn.dataset.field;
-      const value = Number(document.getElementById('consultant-input').value);
-      if (!value || value <= 0) { toast('Введите число'); return; }
-      state.consultantAnswers[field] = value;
-      if (field === 'height') { state.consultantStep = 'weight'; render(); return; }
-
-      // Оба числовых ответа собраны — считаем подборку
-      const tags = getConsultantTags(state.consultantAnswers);
-      state.consultantProducts = pickConsultantProducts(tags);
-      state.consultantSelected = {};
-      state.consultantStep = 'result';
-      render();
+      await sendConsultantChat();
     };
   }
+  const consultantSendBtn = app.querySelector('#consultant-chat-send');
+  const consultantInput = app.querySelector('#consultant-chat-input');
+  async function submitConsultantInput() {
+    const text = consultantInput.value.trim();
+    if (!text) return;
+    state.consultantChat.messages.push({ role: 'user', content: text });
+    state.consultantChat.loading = true;
+    state.consultantChat.error = false;
+    render();
+    await sendConsultantChat();
+  }
+  if (consultantSendBtn) consultantSendBtn.onclick = submitConsultantInput;
+  if (consultantInput) {
+    consultantInput.focus();
+    consultantInput.onkeydown = (e) => { if (e.key === 'Enter') submitConsultantInput(); };
+  }
+
   app.querySelectorAll('[data-consultant-toggle]').forEach(cb => {
     cb.onchange = () => { state.consultantSelected[cb.dataset.consultantToggle] = cb.checked; render(); };
   });
@@ -1802,7 +1786,7 @@ function attachEvents() {
     };
   }
   const consultantRestartBtn = app.querySelector('[data-action="consultant-restart"]');
-  if (consultantRestartBtn) consultantRestartBtn.onclick = () => { state.consultantStep = 'intro'; state.consultantAnswers = {}; render(); };
+  if (consultantRestartBtn) consultantRestartBtn.onclick = () => { state.consultantStep = 'intro'; state.consultantChat = { messages: [], loading: false, error: false }; render(); };
 
   const copyRefBtn = app.querySelector('[data-action="copy-ref-link"]');
   if (copyRefBtn) copyRefBtn.onclick = () => {

@@ -792,3 +792,35 @@ img.thumb { width: 44px; height: 44px; }
   color: var(--forest-dark);
   cursor: pointer;
 }
+
+/* ---- Чат с ИИ-консультантом ---- */
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 55vh;
+  overflow-y: auto;
+  margin-bottom: 14px;
+  padding-right: 2px;
+}
+.chat-bubble {
+  max-width: 82%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.chat-bubble.user {
+  align-self: flex-end;
+  background: var(--forest);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.chat-bubble.assistant {
+  align-self: flex-start;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  border-bottom-left-radius: 4px;
+}
+.chat-typing { opacity: 0.6; font-style: italic; }
