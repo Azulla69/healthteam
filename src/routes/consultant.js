@@ -4,8 +4,8 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 
 function buildSystemPrompt() {
   const products = db.getProducts({ onlyActive: true }).filter(p => p.stock > 0);
@@ -34,27 +34,27 @@ function buildSystemPrompt() {
 ${catalogText}`;
 }
 
-async function callDeepSeek(messages) {
-  const res = await fetch(DEEPSEEK_URL, {
+async function callGemini(messages) {
+  const res = await fetch(GEMINI_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      'Authorization': `Bearer ${GEMINI_API_KEY}`
     },
     body: JSON.stringify({
-      model: 'deepseek-v4-flash',
+      model: 'gemini-2.5-flash',
       messages,
       temperature: 0.7,
       max_tokens: 700
     })
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'deepseek_error');
+  if (!res.ok) throw new Error(data.error?.message || 'gemini_error');
   return data.choices[0].message.content;
 }
 
 router.post('/chat', requireAuth, async (req, res) => {
-  if (!DEEPSEEK_API_KEY) return res.status(503).json({ error: 'ai_not_configured' });
+  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'ai_not_configured' });
   const { messages } = req.body;
   if (!Array.isArray(messages) || messages.length > 40) {
     return res.status(400).json({ error: 'bad_messages' });
@@ -63,10 +63,10 @@ router.post('/chat', requireAuth, async (req, res) => {
     const safeMessages = messages
       .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
       .map(m => ({ role: m.role, content: m.content.slice(0, 2000) }));
-    const reply = await callDeepSeek([{ role: 'system', content: buildSystemPrompt() }, ...safeMessages]);
+    const reply = await callGemini([{ role: 'system', content: buildSystemPrompt() }, ...safeMessages]);
     res.json({ reply });
   } catch (e) {
-    console.error('Ошибка обращения к DeepSeek:', e.message);
+    console.error('Ошибка обращения к Gemini:', e.message);
     res.status(500).json({ error: 'ai_error' });
   }
 });
