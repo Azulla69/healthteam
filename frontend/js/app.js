@@ -240,6 +240,13 @@ async function sendConsultantChat() {
     if (match) {
       recommendedIds = match[1].split(',').map(s => s.replace(/\D/g, '')).filter(Boolean).map(Number);
       reply = reply.replace(CONSULTANT_MARKER_RE, '').trim();
+    } else {
+      const lines = reply.trim().split('\n');
+      const lastLine = (lines[lines.length - 1] || '').trim();
+      if (/^[#\d\s,]+$/.test(lastLine) && /\d/.test(lastLine)) {
+        const ids = lastLine.split(',').map(s => s.replace(/\D/g, '')).filter(Boolean).map(Number);
+        if (ids.length >= 2) { recommendedIds = ids; lines.pop(); reply = lines.join('\n').trim(); }
+      }
     }
     state.consultantChat.messages.push({ role: 'assistant', content: reply });
     state.consultantChat.loading = false;

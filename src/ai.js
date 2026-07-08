@@ -32,6 +32,11 @@ function buildSystemPrompt() {
 В самом конце этого сообщения с рекомендацией (и только тогда, когда рекомендация уже готова) добавь последней строкой маркер в ТОЧНО таком формате — просто числа через запятую, БЕЗ решёток (#) и без лишних символов, используя только реальные ID из каталога ниже, от 2 до 5 штук:
 [[РЕКОМЕНДАЦИЯ: id1,id2,id3]]
 
+Например, если рекомендуешь товары с ID 3, 7 и 12, последняя строка сообщения должна быть ровно такой:
+[[РЕКОМЕНДАЦИЯ: 3,7,12]]
+
+Это обязательное правило — без этой строки в точно таком формате рекомендация не будет обработана.
+
 Не показывай и не упоминай этот маркер, пока не собрал все 5 пунктов и не дал полную развёрнутую рекомендацию.
 
 Каталог доступных товаров (используй только эти ID):
@@ -73,14 +78,26 @@ async function callGroq(messages) {
 // productIds не null, только когда ИИ закончил подбор и вставил маркер рекомендации
 async function askConsultant(historyMessages) {
   const raw = await callGroq([{ role: 'system', content: buildSystemPrompt() }, ...historyMessages]);
+  return extractRecommendation(raw);
+}
+
+function extractRecommendation(raw) {
   const match = raw.match(CONSULTANT_MARKER_RE);
-  let productIds = null;
-  let text = raw;
   if (match) {
-    productIds = parseIds(match[1]);
-    text = raw.replace(CONSULTANT_MARKER_RE, '').trim();
+    return { text: raw.replace(CONSULTANT_MARKER_RE, '').trim(), productIds: parseIds(match[1]) };
   }
-  return { text, productIds };
+  // Модель иногда забывает обернуть список в [[РЕКОМЕНДАЦИЯ: ...]] и просто пишет числа последней строкой —
+  // подстраховываемся: если последняя строка сообщения похожа на голый список ID, считаем это рекомендацией
+  const lines = raw.trim().split('\n');
+  const lastLine = (lines[lines.length - 1] || '').trim();
+  if (/^[#\d\s,]+$/.test(lastLine) && /\d/.test(lastLine)) {
+    const ids = parseIds(lastLine);
+    if (ids.length >= 2) {
+      lines.pop();
+      return { text: lines.join('\n').trim(), productIds: ids };
+    }
+  }
+  return { text: raw, productIds: null };
 }
 
 module.exports = { GROQ_API_KEY, buildSystemPrompt, callGroq, askConsultant, CONSULTANT_MARKER_RE };
