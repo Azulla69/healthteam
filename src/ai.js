@@ -45,7 +45,10 @@ function buildSystemPrompt() {
 ${catalogText}`;
 }
 
-async function callGroq(messages) {
+const PRIMARY_MODEL = 'llama-3.3-70b-versatile'; // качественная модель, но лимит по токенам скромнее
+const FALLBACK_MODEL = 'llama-3.1-8b-instant';    // подключается автоматически, если у основной кончился дневной лимит
+
+async function callGroq(messages, model = PRIMARY_MODEL) {
   const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
@@ -53,7 +56,7 @@ async function callGroq(messages) {
       'Authorization': `Bearer ${GROQ_API_KEY}`
     },
     body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
+      model,
       messages,
       temperature: 0.7,
       max_tokens: 1500
@@ -67,13 +70,28 @@ async function callGroq(messages) {
   }
   if (!res.ok) {
     console.error('Полный ответ Groq при ошибке:', JSON.stringify(data));
-    throw new Error(`groq_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
+    const err = new Error(`groq_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
+    err.status = res.status;
+    throw err;
   }
   if (!data.choices || !data.choices[0]) {
     console.error('Неожиданный формат ответа Groq:', JSON.stringify(data));
     throw new Error('groq_unexpected_format');
   }
   return sanitizeReply(data.choices[0].message.content);
+}
+
+// Сначала пробуем качественную модель; если у неё кончился дневной лимит (429) — тихо переключаемся на резервную
+async function callGroqSmart(messages) {
+  try {
+    return await callGroq(messages, PRIMARY_MODEL);
+  } catch (e) {
+    if (e.status === 429) {
+      console.warn('Лимит основной модели исчерпан, переключаюсь на резервную модель');
+      return await callGroq(messages, FALLBACK_MODEL);
+    }
+    throw e;
+  }
 }
 
 // Подстраховка от известной особенности Llama — иногда вставляет случайные иероглифы
@@ -87,7 +105,7 @@ function sanitizeReply(text) {
 // Отправляет всю историю разговора в Groq и возвращает { text, productIds }
 // productIds не null, только когда ИИ закончил подбор и вставил маркер рекомендации
 async function askConsultant(historyMessages) {
-  const raw = await callGroq([{ role: 'system', content: buildSystemPrompt() }, ...historyMessages]);
+  const raw = await callGroqSmart([{ role: 'system', content: buildSystemPrompt() }, ...historyMessages]);
   return extractRecommendation(raw);
 }
 
@@ -123,7 +141,7 @@ ${list}
 Если для товара обычно достаточно приёма один раз в день — используй один элемент timing. Если по инструкции приём несколько раз в день — укажи несколько значений timing. Основывайся на общепринятых рекомендациях для такого типа добавок.`;
 
   try {
-    const raw = await callGroq([{ role: 'user', content: prompt }]);
+    const raw = await callGroqSmart([{ role: 'user', content: prompt }]);
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return null;
     const parsed = JSON.parse(jsonMatch[0]);
