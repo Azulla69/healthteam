@@ -105,6 +105,7 @@ if (fs.existsSync(DB_FILE)) {
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
+    if (u.admin_note === undefined) u.admin_note = '';
     if (u.referred_by === undefined) u.referred_by = null;
     if (u.referral_milestones_awarded === undefined) u.referral_milestones_awarded = [];
     if (u.birthday_discount_used_at === undefined) u.birthday_discount_used_at = null;
@@ -151,6 +152,7 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
       phone: '', address: '', birth_date: null, birth_date_updated_at: null,
       bonus_balance: 0, first_purchase_at: null,
       referred_by: null, referral_milestones_awarded: [], birthday_discount_used_at: null,
+      admin_note: '',
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -442,7 +444,7 @@ function getAllOrders() {
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     .map(o => {
       const user = data.users.find(u => u.id === o.user_id) || {};
-      return { ...attachItems(o), first_name: user.first_name, last_name: user.last_name, username: user.username, telegram_id: user.telegram_id };
+      return { ...attachItems(o), first_name: user.first_name, last_name: user.last_name, username: user.username, telegram_id: user.telegram_id, buyer_note: user.admin_note };
     });
 }
 

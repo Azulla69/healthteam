@@ -1165,7 +1165,7 @@ function renderManageOrders() {
               <strong>Заказ №${o.id}</strong>
               ${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}
             </div>
-            <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'} · ${o.phone || '—'}</div>
+            <div style="font-size:12px;color:var(--ink-soft);margin-top:4px">${o.first_name || ''} ${o.last_name || ''} · @${o.username || '—'} · ${o.phone || '—'}${o.buyer_note ? ` · 📝 ${o.buyer_note}` : ''}</div>
             <div style="font-size:13px;margin:8px 0;color:var(--ink-soft)">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
             <div class="row-between"><span class="price-tag">${o.payable_total ?? o.total} ₽</span></div>
           </div>
@@ -1211,7 +1211,7 @@ function openManageOrderDetailModal(order) {
       <div class="modal-sheet">
         <h3>Заказ №${order.id}</h3>
         <span class="status-badge status-${order.status}">${STATUS_LABELS[order.status]}</span>
-        <div class="field" style="margin-top:10px"><label>Покупатель</label><div style="font-size:14px">${order.first_name || ''} ${order.last_name || ''} · @${order.username || '—'} (id ${order.telegram_id})</div></div>
+        <div class="field" style="margin-top:10px"><label>Покупатель</label><div style="font-size:14px">${order.first_name || ''} ${order.last_name || ''} · @${order.username || '—'} (id ${order.telegram_id})${order.buyer_note ? `<br>📝 ${order.buyer_note}` : ''}</div></div>
         <div class="field"><label>Телефон</label><div style="font-size:14px">${order.phone || '—'}</div></div>
         ${orderItemsHtml(order)}
         <div class="row-between" style="margin:12px 0"><strong>Итого к оплате</strong><span class="price-tag">${order.payable_total ?? order.total} ₽</span></div>
@@ -1289,7 +1289,7 @@ function renderManageUsers() {
       <div class="user-row" data-open-user="${u.id}">
         <div>
           <div class="n">${u.first_name || 'Без имени'} ${u.last_name || ''}</div>
-          <div class="m">@${u.username || '—'}</div>
+          <div class="m">@${u.username || '—'}${u.admin_note ? ` · 📝 ${u.admin_note}` : ''}</div>
         </div>
         <div class="price-tag">${u.stats.totalSpent} ₽</div>
       </div>
@@ -1300,6 +1300,7 @@ async function openUserDetailModal(userId) {
   const u = await api(`/api/users/${userId}`);
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
+  let noteEditing = false;
 
   function draw() {
     backdrop.innerHTML = `
@@ -1309,6 +1310,26 @@ async function openUserDetailModal(userId) {
         <div class="field"><label>Username</label><div style="font-size:14px">@${u.username || '—'}</div></div>
         <div class="field"><label>Телефон</label><div style="font-size:14px">${u.phone || '—'}</div></div>
         <div class="field"><label>Дата рождения</label><div style="font-size:14px">${u.birth_date ? fmtDate(u.birth_date) : '—'}</div></div>
+
+        <div class="field">
+          <label>📝 Заметка администратора (видна только вам)</label>
+          ${noteEditing ? `
+            <input id="ud-note-input" value="${u.admin_note || ''}" placeholder="напр. Постоянный клиент, любит скидки" />
+            <div class="order-actions" style="margin-top:8px">
+              <button class="btn btn-primary" id="ud-note-save">Сохранить</button>
+              <button class="btn btn-ghost" id="ud-note-cancel">Отмена</button>
+            </div>
+          ` : `
+            <div class="row-between">
+              <span style="font-size:14px">${u.admin_note || 'Не указана'}</span>
+              <div style="display:flex;gap:6px">
+                <button class="icon-btn" id="ud-note-edit">✏️</button>
+                ${u.admin_note ? `<button class="icon-btn" id="ud-note-delete">🗑</button>` : ''}
+              </div>
+            </div>
+          `}
+        </div>
+
         <div class="stats-row">
           <div class="stat-box"><div class="num">${u.stats.ordersCount}</div><div class="lbl">Заказов</div></div>
           <div class="stat-box"><div class="num">${u.stats.totalSpent} ₽</div><div class="lbl">Потрачено</div></div>
@@ -1333,6 +1354,35 @@ async function openUserDetailModal(userId) {
     `;
     backdrop.querySelector('#ud-close').onclick = () => backdrop.remove();
     backdrop.querySelector('#ud-add-order').onclick = () => openManualOrderModal(u, () => reload());
+
+    const noteEditBtn = backdrop.querySelector('#ud-note-edit');
+    if (noteEditBtn) noteEditBtn.onclick = () => { noteEditing = true; draw(); };
+    const noteCancelBtn = backdrop.querySelector('#ud-note-cancel');
+    if (noteCancelBtn) noteCancelBtn.onclick = () => { noteEditing = false; draw(); };
+    const noteSaveBtn = backdrop.querySelector('#ud-note-save');
+    if (noteSaveBtn) noteSaveBtn.onclick = async () => {
+      const note = document.getElementById('ud-note-input').value.trim();
+      try {
+        const result = await api(`/api/users/${u.id}/note`, { method: 'PUT', body: { note } });
+        u.admin_note = result.admin_note;
+        noteEditing = false;
+        draw();
+        await loadUsers();
+        toast('Заметка сохранена');
+      } catch (e) { toast('Не удалось сохранить заметку'); }
+    };
+    const noteDeleteBtn = backdrop.querySelector('#ud-note-delete');
+    if (noteDeleteBtn) noteDeleteBtn.onclick = async () => {
+      if (!confirm('Удалить заметку?')) return;
+      try {
+        await api(`/api/users/${u.id}/note`, { method: 'PUT', body: { note: '' } });
+        u.admin_note = '';
+        draw();
+        await loadUsers();
+        toast('Заметка удалена');
+      } catch (e) { toast('Не удалось удалить заметку'); }
+    };
+
     backdrop.querySelectorAll('[data-delete-user-order]').forEach(btn => {
       btn.onclick = async () => {
         if (!confirm('Удалить этот заказ из истории покупателя? Если он был выполнен — товар вернётся на склад, а сумма уйдёт из бухгалтерии.')) return;
