@@ -24,21 +24,31 @@ function keyboard() {
   };
 }
 
-async function sendMessage(chatId) {
+async function sendRaw(chatId, text, replyMarkup) {
+  if (!BOT_TOKEN || BOT_TOKEN.includes('Example')) return; // бот не настроен — тихо выходим
   try {
     await fetch(`${API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: WELCOME_TEXT,
-        parse_mode: 'HTML',
-        reply_markup: keyboard()
-      })
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', reply_markup: replyMarkup })
     });
   } catch (e) {
     console.error('Ошибка отправки сообщения ботом:', e.message);
   }
+}
+
+async function sendMessage(chatId) {
+  await sendRaw(chatId, WELCOME_TEXT, keyboard());
+}
+
+// Отправляется автоматически, когда заказ переходит в статус "Выполнено"
+async function notifyOrderCompleted(telegramId, orderId) {
+  const text = `Заказ №${orderId} доставлен! 🎉\n\nСпасибо, что выбрали HealthTeam. Будем рады, если оцените заказ — это займёт минуту, а за отзыв начислим <b>50 бонусов</b> на ваш счёт.`;
+  const reviewUrl = WEBAPP_URL ? `${WEBAPP_URL}?review=${orderId}` : null;
+  const replyMarkup = reviewUrl
+    ? { inline_keyboard: [[{ text: '⭐ Оценить заказ', web_app: { url: reviewUrl } }]] }
+    : undefined;
+  await sendRaw(telegramId, text, replyMarkup);
 }
 
 let offset = 0;
@@ -78,4 +88,4 @@ function startBot() {
 
 function stopBot() { stopped = true; }
 
-module.exports = { startBot, stopBot };
+module.exports = { startBot, stopBot, notifyOrderCompleted };

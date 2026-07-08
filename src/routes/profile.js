@@ -20,7 +20,8 @@ router.get('/me', requireAuth, (req, res) => {
     ...req.user, isAdmin: req.isAdmin, stats,
     bonus: db.getBonusInfo(req.user),
     birthdayDiscount: db.getBirthdayDiscountInfo(req.user),
-    referral: referralInfo(req.user)
+    referral: referralInfo(req.user),
+    unreadNotifications: db.getUnreadNotificationsCount(req.user.id)
   });
 });
 
@@ -65,6 +66,15 @@ router.post('/referral', requireAuth, (req, res) => {
 
 router.get('/bonus-history', requireAuth, (req, res) => {
   res.json(db.getBonusHistory(req.user.id).map(t => ({ ...t, label: db.TX_LABELS[t.type] || t.type })));
+});
+
+router.get('/notifications', requireAuth, (req, res) => {
+  res.json({ items: db.getNotifications(req.user.id), unread: db.getUnreadNotificationsCount(req.user.id) });
+});
+
+router.post('/notifications/read-all', requireAuth, (req, res) => {
+  db.markAllNotificationsRead(req.user.id);
+  res.json({ ok: true });
 });
 
 module.exports = router;

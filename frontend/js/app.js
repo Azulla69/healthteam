@@ -19,6 +19,7 @@ const state = {
   consultantProducts: [],
   consultantSelected: {},
   consultantEligibleIds: [], // товары из последней подборки — для показа чекбокса скидки в корзине
+  reviewsData: { items: [], total: 0, avg: 0, page: 1, totalPages: 1 },
 
   catalogStep: 'sections',
   selectedSection: null,
@@ -97,6 +98,12 @@ async function loadInitialData() {
   } catch (e) { /* гость */ }
   await loadProducts();
   render();
+
+  // Открыто по кнопке "Оценить заказ" из сообщения бота: /?review=123
+  const reviewOrderId = new URLSearchParams(window.location.search).get('review');
+  if (reviewOrderId && state.user) {
+    openReviewForm(Number(reviewOrderId));
+  }
 }
 
 function openOnboardingModal() {
@@ -153,6 +160,7 @@ function render() {
   else if (state.view === 'catalog') html = renderCatalog();
   else if (state.view === 'bonusInfo') html = renderBonusInfoPage();
   else if (state.view === 'referral') html = renderReferralPage();
+  else if (state.view === 'reviews') html = renderReviewsWall();
   else if (state.view === 'consultant') html = renderConsultantStub();
   else if (state.view === 'cart') html = renderCart();
   else if (state.view === 'profile') html = renderProfile();
@@ -173,7 +181,7 @@ function renderTabbar() {
   return `
     <div class="tabbar">
       ${tabs.map(t => `
-        <button class="tab ${state.view === t.id || (t.id === 'services' && ['catalog', 'bonusInfo', 'referral', 'consultant'].includes(state.view)) ? 'active' : ''}" data-tab="${t.id}" style="position:relative;">
+        <button class="tab ${state.view === t.id || (t.id === 'services' && ['catalog', 'bonusInfo', 'referral', 'consultant', 'reviews'].includes(state.view)) ? 'active' : ''}" data-tab="${t.id}" style="position:relative;">
           <span>${t.icon}</span><span>${t.label}</span>
           ${t.badge ? `<span class="dot"></span>` : ''}
         </button>
@@ -189,6 +197,7 @@ function renderServices() {
     { id: 'consultant', emoji: '🧬', name: 'Бот-консультант', desc: 'Подбор добавок под вас' },
     { id: 'bonusInfo', emoji: '🎁', name: 'Бонусная система', desc: 'Кэшбек и уровни' },
     { id: 'referral', emoji: '🤝', name: 'Реферальная система', desc: 'Приглашайте друзей' },
+    { id: 'reviews', emoji: '⭐', name: 'Отзывы', desc: 'Мнения покупателей' },
   ];
   return `
     <div class="topbar-centered"><h1>HealthTeam</h1></div>
@@ -386,6 +395,48 @@ function renderReferralPage() {
           </div>
         `).join('')}
       </div>
+    </div>
+  `;
+}
+
+async function loadReviews(page = 1) {
+  state.reviewsData = await api(`/api/reviews?page=${page}`);
+}
+
+function renderReviewsWall() {
+  const d = state.reviewsData;
+  return `
+    <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+    <div class="topbar-centered"><h1>Отзывы</h1></div>
+    <div class="section" style="padding-top:0">
+      <div class="stats-row">
+        <div class="stat-box"><div class="num">${d.avg || '—'} ⭐</div><div class="lbl">Средняя оценка</div></div>
+        <div class="stat-box"><div class="num">${d.total}</div><div class="lbl">Всего отзывов</div></div>
+      </div>
+      ${d.items.length === 0 ? `<div class="empty-state"><h3>Отзывов пока нет</h3><p>Будьте первым, кто оценит заказ!</p></div>` :
+        d.items.map(r => `
+          <div class="list-item">
+            <div class="row-between">
+              <strong>${r.author_name}</strong>
+              <span class="tier-badge" style="background:var(--sage);color:var(--forest-dark)">⭐ ${r.avg}/10</span>
+            </div>
+            <div style="font-size:11px;color:var(--ink-soft);margin:4px 0 8px">${fmtDate(r.created_at)}</div>
+            <div style="font-size:12px;color:var(--ink-soft);display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+              <span>Товар: ${r.product_quality}/10</span>
+              <span>Сервис: ${r.service_quality}/10</span>
+              <span>Доставка: ${r.delivery_speed}/10</span>
+            </div>
+            ${r.text ? `<p style="font-size:13px;line-height:1.5">${r.text}</p>` : ''}
+          </div>
+        `).join('')
+      }
+      ${d.totalPages > 1 ? `
+        <div class="row-between" style="margin-top:12px">
+          <button class="btn btn-ghost" data-action="reviews-prev" ${d.page <= 1 ? 'disabled' : ''}>← Назад</button>
+          <span style="font-size:13px;color:var(--ink-soft)">Стр. ${d.page} из ${d.totalPages}</span>
+          <button class="btn btn-ghost" data-action="reviews-next" ${d.page >= d.totalPages ? 'disabled' : ''}>Вперёд →</button>
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -796,6 +847,7 @@ function renderProfile() {
         <div class="avatar-lg">${avatar}</div>
         <div class="pname">${state.user.first_name || 'Без имени'} ${state.user.last_name || ''}</div>
       </div>
+      <button class="notif-bell" data-action="open-notifications">🔔${state.user.unreadNotifications > 0 ? `<span class="badge">${Math.min(state.user.unreadNotifications, 9)}</span>` : ''}</button>
       <button class="settings-gear" data-action="open-settings">⚙️</button>
     </div>
     <div class="section">
@@ -835,6 +887,94 @@ function renderBonusCard(bonus, clickable = true) {
       </div>
     </div>
   `;
+}
+
+async function openNotificationsModal() {
+  const data = await api('/api/profile/notifications');
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>Уведомления</h3>
+      ${data.items.length === 0 ? `<div class="empty-state"><h3>Пока пусто</h3></div>` :
+        data.items.map(n => `
+          <div class="notif-item ${n.read ? '' : 'unread'}" data-notif-id="${n.id}" data-notif-order="${n.meta?.order_id || ''}">
+            <div class="title">${n.title}</div>
+            <div class="body">${n.body}</div>
+            <div class="date">${fmtDate(n.created_at)}</div>
+          </div>
+        `).join('')
+      }
+      <button class="btn btn-ghost btn-block" id="notif-close" style="margin-top:10px">Закрыть</button>
+    </div>
+  `;
+  backdrop.querySelector('#notif-close').onclick = () => backdrop.remove();
+  backdrop.querySelectorAll('[data-notif-order]').forEach(el => {
+    if (el.dataset.notifOrder) {
+      el.onclick = () => { backdrop.remove(); openReviewForm(Number(el.dataset.notifOrder)); };
+    }
+  });
+  document.body.appendChild(backdrop);
+  if (data.unread > 0) {
+    await api('/api/profile/notifications/read-all', { method: 'POST' });
+    if (state.user) state.user.unreadNotifications = 0;
+  }
+}
+
+function openReviewForm(orderId) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const ratings = { product_quality: 8, service_quality: 8, delivery_speed: 8 };
+
+  function draw() {
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        <h3>⭐ Оценить заказ №${orderId}</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px">За отзыв начислим 50 бонусов на ваш счёт.</p>
+
+        <div class="field">
+          <label>Качество товара: <strong id="val-product">${ratings.product_quality}</strong>/10</label>
+          <input type="range" min="1" max="10" id="rate-product" value="${ratings.product_quality}" style="width:100%" />
+        </div>
+        <div class="field">
+          <label>Качество обслуживания: <strong id="val-service">${ratings.service_quality}</strong>/10</label>
+          <input type="range" min="1" max="10" id="rate-service" value="${ratings.service_quality}" style="width:100%" />
+        </div>
+        <div class="field">
+          <label>Скорость доставки: <strong id="val-delivery">${ratings.delivery_speed}</strong>/10</label>
+          <input type="range" min="1" max="10" id="rate-delivery" value="${ratings.delivery_speed}" style="width:100%" />
+        </div>
+        <div class="field"><label>Комментарий (необязательно)</label><textarea id="review-text" placeholder="Расскажите, как всё прошло..."></textarea></div>
+        <label class="row-between" style="padding:10px 0;cursor:pointer">
+          <span>Опубликовать анонимно</span>
+          <input type="checkbox" id="review-anonymous" />
+        </label>
+        <button class="btn btn-primary btn-block" id="review-submit">Отправить отзыв</button>
+        <button class="btn btn-ghost btn-block" id="review-cancel" style="margin-top:8px">Отмена</button>
+      </div>
+    `;
+    // Значения ползунков обновляем точечно (без перерисовки всей модалки), чтобы не прерывать drag
+    backdrop.querySelector('#rate-product').oninput = (e) => { ratings.product_quality = Number(e.target.value); backdrop.querySelector('#val-product').textContent = e.target.value; };
+    backdrop.querySelector('#rate-service').oninput = (e) => { ratings.service_quality = Number(e.target.value); backdrop.querySelector('#val-service').textContent = e.target.value; };
+    backdrop.querySelector('#rate-delivery').oninput = (e) => { ratings.delivery_speed = Number(e.target.value); backdrop.querySelector('#val-delivery').textContent = e.target.value; };
+    backdrop.querySelector('#review-cancel').onclick = () => backdrop.remove();
+    backdrop.querySelector('#review-submit').onclick = async () => {
+      const text = document.getElementById('review-text').value.trim();
+      const anonymous = document.getElementById('review-anonymous').checked;
+      try {
+        await api(`/api/orders/${orderId}/review`, { method: 'POST', body: { ...ratings, text, anonymous } });
+        backdrop.remove();
+        toast('Спасибо за отзыв! Начислено 50 бонусов 🎉');
+        state.user = await api('/api/profile/me');
+        render();
+      } catch (e) {
+        if (e.message === 'already_reviewed') toast('Вы уже оставляли отзыв на этот заказ');
+        else toast('Не удалось отправить отзыв');
+      }
+    };
+  }
+  draw();
+  document.body.appendChild(backdrop);
 }
 
 async function openBonusHistoryModal() {
@@ -1587,10 +1727,11 @@ function attachEvents() {
 
   // Сервисы: переход к разделу
   app.querySelectorAll('[data-service]').forEach(tile => {
-    tile.onclick = () => {
+    tile.onclick = async () => {
       state.view = tile.dataset.service;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
       if (state.view === 'consultant') { state.consultantStep = 'intro'; state.consultantAnswers = {}; state.consultantSelected = {}; }
+      if (state.view === 'reviews') { await loadReviews(1); }
       render();
     };
   });
@@ -1764,6 +1905,12 @@ function attachEvents() {
   // Профиль
   const gearBtn = app.querySelector('[data-action="open-settings"]');
   if (gearBtn) gearBtn.onclick = () => openSettingsModal();
+  const bellBtn = app.querySelector('[data-action="open-notifications"]');
+  if (bellBtn) bellBtn.onclick = () => openNotificationsModal();
+  const reviewsPrevBtn = app.querySelector('[data-action="reviews-prev"]');
+  if (reviewsPrevBtn) reviewsPrevBtn.onclick = async () => { await loadReviews(state.reviewsData.page - 1); render(); };
+  const reviewsNextBtn = app.querySelector('[data-action="reviews-next"]');
+  if (reviewsNextBtn) reviewsNextBtn.onclick = async () => { await loadReviews(state.reviewsData.page + 1); render(); };
   const toggleModeBtn = app.querySelector('[data-action="toggle-view-mode"]');
   if (toggleModeBtn) {
     toggleModeBtn.onclick = () => {

@@ -57,7 +57,29 @@ router.put('/:id/deliver', requireAuth, requireAdmin, (req, res) => {
 router.put('/:id/complete', requireAuth, requireAdmin, (req, res) => {
   const result = db.moveToCompleted(req.params.id);
   if (result.error) return errorResponse(res, result);
-  res.json(result.order);
+
+  const order = result.order;
+  const buyer = db.getUser(order.user_id);
+  if (buyer) {
+    db.addNotification(
+      buyer.id, 'Заказ выполнен 🎉',
+      `Заказ №${order.id} доставлен. Оцените заказ и получите 50 бонусов!`,
+      { type: 'review_prompt', order_id: order.id }
+    );
+    require('../bot').notifyOrderCompleted(buyer.telegram_id, order.id).catch(() => {});
+  }
+
+  res.json(order);
+});
+
+router.post('/:id/review', requireAuth, (req, res) => {
+  const { product_quality, service_quality, delivery_speed, text, anonymous } = req.body;
+  const result = db.submitReview(req.params.id, req.user.id, { product_quality, service_quality, delivery_speed, text, anonymous });
+  if (result.error) {
+    const map = { not_found: 404, forbidden: 403, not_completed: 400, already_reviewed: 400, bad_rating: 400 };
+    return res.status(map[result.error] || 400).json(result);
+  }
+  res.status(201).json(result.review);
 });
 
 // Отметка оплаты (не меняет статус, просто флаг)

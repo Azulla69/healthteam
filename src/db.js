@@ -29,6 +29,7 @@ const CONSULTANT_SESSION_TTL_HOURS = 24;
 const BIRTHDAY_WINDOW_DAYS = 7;
 const MAX_BONUS_PAYMENT_SHARE = 0.5;
 const SIGNUP_BONUS = 100;
+const REVIEW_BONUS = 50;
 const DELIVERY_TIERS = [
   { max: 500, cost: 300 },
   { max: 1000, cost: 200 },
@@ -82,7 +83,8 @@ function loadDefault() {
   const products = seedProducts();
   return {
     users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [], consultant_sessions: [],
-    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1 }
+    notifications: [], reviews: [],
+    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1 }
   };
 }
 
@@ -92,10 +94,14 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.ledger) data.ledger = [];
   if (!data.bonus_tx) data.bonus_tx = [];
   if (!data.consultant_sessions) data.consultant_sessions = [];
+  if (!data.notifications) data.notifications = [];
+  if (!data.reviews) data.reviews = [];
   if (!data.seq.ledger) data.seq.ledger = 1;
   if (!data.seq.batches) data.seq.batches = 1;
   if (!data.seq.bonus_tx) data.seq.bonus_tx = 1;
   if (!data.seq.consultant_sessions) data.seq.consultant_sessions = 1;
+  if (!data.seq.notifications) data.seq.notifications = 1;
+  if (!data.seq.reviews) data.seq.reviews = 1;
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
@@ -112,7 +118,18 @@ if (fs.existsSync(DB_FILE)) {
         order_id: null, description: 'Перенос баланса из старой системы'
       });
     }
+    // Доначисляем приветственный бонус тем, кто зарегистрировался до введения этой механики
+    if (!data.bonus_tx.some(t => t.user_id === u.id && t.type === 'signup')) {
+      const now = new Date();
+      const expires = new Date(now); expires.setMonth(expires.getMonth() + BONUS_EXPIRY_MONTHS);
+      data.bonus_tx.push({
+        id: data.seq.bonus_tx++, user_id: u.id, type: 'signup', amount: SIGNUP_BONUS,
+        remaining: SIGNUP_BONUS, created_at: now.toISOString(), expires_at: expires.toISOString(),
+        order_id: null, description: 'Приветственный бонус (начислен при обновлении)'
+      });
+    }
   });
+  persist();
 } else {
   data = loadDefault();
   persist();
@@ -798,6 +815,67 @@ function getShopStats() {
   };
 }
 
+// ---------- Уведомления ----------
+function addNotification(user_id, title, body, meta = {}) {
+  data.notifications.push({
+    id: nextId('notifications'), user_id, title, body, meta,
+    created_at: new Date().toISOString(), read: false
+  });
+  persist();
+}
+
+function getNotifications(user_id) {
+  return data.notifications.filter(n => n.user_id === user_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
+function getUnreadNotificationsCount(user_id) {
+  return data.notifications.filter(n => n.user_id === user_id && !n.read).length;
+}
+
+function markAllNotificationsRead(user_id) {
+  data.notifications.forEach(n => { if (n.user_id === user_id) n.read = true; });
+  persist();
+}
+
+// ---------- Отзывы ----------
+function submitReview(order_id, user_id, { product_quality, service_quality, delivery_speed, text, anonymous }) {
+  const order = getOrderRaw(order_id);
+  if (!order) return { error: 'not_found' };
+  if (order.user_id !== user_id) return { error: 'forbidden' };
+  if (order.status !== 'completed') return { error: 'not_completed' };
+  if (order.reviewed) return { error: 'already_reviewed' };
+
+  const pq = Math.min(10, Math.max(1, Number(product_quality) || 0));
+  const sq = Math.min(10, Math.max(1, Number(service_quality) || 0));
+  const ds = Math.min(10, Math.max(1, Number(delivery_speed) || 0));
+  if (!pq || !sq || !ds) return { error: 'bad_rating' };
+  const avg = Math.round(((pq + sq + ds) / 3) * 10) / 10;
+
+  const user = getUser(user_id);
+  const review = {
+    id: nextId('reviews'), order_id, user_id,
+    product_quality: pq, service_quality: sq, delivery_speed: ds, avg,
+    text: (text || '').trim(), anonymous: !!anonymous,
+    author_name: anonymous ? 'Аноним' : `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Покупатель',
+    created_at: new Date().toISOString()
+  };
+  data.reviews.push(review);
+  order.reviewed = true;
+  addEarnTx(user_id, 'review', REVIEW_BONUS, order_id, `Бонус за отзыв на заказ №${order_id}`);
+  persist();
+  return { review };
+}
+
+function getReviews({ page = 1, pageSize = 10 } = {}) {
+  const all = [...data.reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const total = all.length;
+  const avg = total === 0 ? 0 : Math.round((all.reduce((s, r) => s + r.avg, 0) / total) * 10) / 10;
+  const start = (page - 1) * pageSize;
+  const items = all.slice(start, start + pageSize);
+  return { items, total, avg, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+
 module.exports = {
   DATA_DIR,
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown, setReferrer,
@@ -810,5 +888,7 @@ module.exports = {
   getBonusInfo, getBonusBalance, getBonusHistory, redeemBonuses, TX_LABELS,
   getBirthdayDiscountInfo, REFERRAL_RATE, REFERRAL_QUALIFY_MIN, REFERRAL_LADDER, MAX_BONUS_PAYMENT_SHARE,
   getDeliveryCost, DELIVERY_TIERS,
-  createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE
+  createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE,
+  addNotification, getNotifications, getUnreadNotificationsCount, markAllNotificationsRead,
+  submitReview, getReviews
 };

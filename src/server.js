@@ -11,6 +11,7 @@ const usersRoutes = require('./routes/users');
 const ledgerRoutes = require('./routes/ledger');
 const statsRoutes = require('./routes/stats');
 const consultantRoutes = require('./routes/consultant');
+const reviewsRoutes = require('./routes/reviews');
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/ledger', ledgerRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/consultant', consultantRoutes);
+app.use('/api/reviews', reviewsRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
