@@ -228,7 +228,7 @@ function renderServices() {
 }
 
 // ================= БОТ-КОНСУЛЬТАНТ (живой чат с ИИ) =================
-const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([\d,\s]+)\]\]/i;
+const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([^\]]+)\]\]/i;
 
 async function sendConsultantChat() {
   try {
@@ -238,7 +238,7 @@ async function sendConsultantChat() {
     const match = reply.match(CONSULTANT_MARKER_RE);
     let recommendedIds = null;
     if (match) {
-      recommendedIds = match[1].split(',').map(s => Number(s.trim())).filter(Boolean);
+      recommendedIds = match[1].split(',').map(s => s.replace(/\D/g, '')).filter(Boolean).map(Number);
       reply = reply.replace(CONSULTANT_MARKER_RE, '').trim();
     }
     state.consultantChat.messages.push({ role: 'assistant', content: reply });

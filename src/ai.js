@@ -3,7 +3,12 @@ const db = require('./db');
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([\d,\s]+)\]\]/i;
+const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([^\]]+)\]\]/i;
+
+// Достаёт числа из списка вида "1,2,3" или "#1, #4, #5" — терпимо к решёткам/пробелам
+function parseIds(raw) {
+  return raw.split(',').map(s => s.replace(/\D/g, '')).filter(Boolean).map(Number);
+}
 
 function buildSystemPrompt() {
   const products = db.getProducts({ onlyActive: true }).filter(p => p.stock > 0);
@@ -24,7 +29,7 @@ function buildSystemPrompt() {
 
 Как только известны все 5 пунктов — вопросов больше не задавай. Вместо этого сразу напиши рекомендацию: объясни, почему именно эти добавки подходят под ситуацию человека и как их лучше принимать. Пиши по существу, без воды — 4-6 предложений достаточно, это сообщение в мессенджере, а не статья.
 
-В самом конце этого сообщения с рекомендацией (и только тогда, когда рекомендация уже готова) добавь последней строкой маркер в ТОЧНО таком формате, используя только реальные ID из каталога ниже, от 2 до 5 штук через запятую:
+В самом конце этого сообщения с рекомендацией (и только тогда, когда рекомендация уже готова) добавь последней строкой маркер в ТОЧНО таком формате — просто числа через запятую, БЕЗ решёток (#) и без лишних символов, используя только реальные ID из каталога ниже, от 2 до 5 штук:
 [[РЕКОМЕНДАЦИЯ: id1,id2,id3]]
 
 Не показывай и не упоминай этот маркер, пока не собрал все 5 пунктов и не дал полную развёрнутую рекомендацию.
@@ -72,7 +77,7 @@ async function askConsultant(historyMessages) {
   let productIds = null;
   let text = raw;
   if (match) {
-    productIds = match[1].split(',').map(s => Number(s.trim())).filter(Boolean);
+    productIds = parseIds(match[1]);
     text = raw.replace(CONSULTANT_MARKER_RE, '').trim();
   }
   return { text, productIds };
