@@ -76,27 +76,27 @@ async function notifyAdminsNewOrder(order, buyer) {
 const conversations = new Map(); // chatId -> [{role, content}]
 
 async function handleUserMessage(chatId, text) {
-  if (text.startsWith('/start')) {
-    conversations.delete(chatId);
-    const payload = text.split(' ')[1];
-    if (payload === 'assistant') {
-      await sendRaw(chatId, ASSISTANT_INTRO_TEXT);
-    } else {
-      await sendRaw(chatId, WELCOME_TEXT, keyboard());
-    }
-    return;
-  }
-
-  if (!ai.GEMINI_API_KEY) {
-    await sendRaw(chatId, 'ИИ-консультант сейчас недоступен — но вы можете открыть магазин кнопкой ниже 👇', keyboard());
-    return;
-  }
-
-  const history = conversations.get(chatId) || [];
-  history.push({ role: 'user', content: text.slice(0, 2000) });
-  if (history.length > 40) history.splice(0, history.length - 40);
-
   try {
+    if (text.startsWith('/start')) {
+      conversations.delete(chatId);
+      const payload = text.split(' ')[1];
+      if (payload === 'assistant') {
+        await sendRaw(chatId, ASSISTANT_INTRO_TEXT);
+      } else {
+        await sendRaw(chatId, WELCOME_TEXT, keyboard());
+      }
+      return;
+    }
+
+    if (!ai.GEMINI_API_KEY) {
+      await sendRaw(chatId, 'ИИ-консультант сейчас недоступен — но вы можете открыть магазин кнопкой ниже 👇', keyboard());
+      return;
+    }
+
+    const history = conversations.get(chatId) || [];
+    history.push({ role: 'user', content: text.slice(0, 2000) });
+    if (history.length > 40) history.splice(0, history.length - 40);
+
     const { text: reply, productIds } = await ai.askConsultant(history);
     history.push({ role: 'assistant', content: reply });
     conversations.set(chatId, history);
@@ -110,7 +110,7 @@ async function handleUserMessage(chatId, text) {
       });
     }
   } catch (e) {
-    console.error('Ошибка ИИ в боте:', e.message);
+    console.error('Ошибка обработки сообщения ботом:', e.message);
     await sendRaw(chatId, 'Извините, не получилось ответить — попробуйте ещё раз чуть позже 🙏');
   }
 }
@@ -127,7 +127,7 @@ async function poll() {
       for (const update of data.result) {
         offset = update.update_id + 1;
         if (update.message && update.message.text) {
-          handleUserMessage(update.message.chat.id, update.message.text);
+          await handleUserMessage(update.message.chat.id, update.message.text);
         }
       }
     }
