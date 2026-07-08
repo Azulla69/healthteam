@@ -71,6 +71,32 @@ async function notifyAdminsNewOrder(order, buyer) {
   }
 }
 
+const TIMING_LABELS = { morning: 'утром', day: 'днём', evening: 'вечером' };
+
+// Отправляется после доставки заказа — рассказывает, как принимать купленное, и предлагает напоминания
+async function notifyDosageAdvice(telegramId, advice) {
+  if (!advice || advice.length === 0) return;
+  const lines = advice.map(a => {
+    const timing = a.timing.map(t => TIMING_LABELS[t] || t).join(', ');
+    const food = a.food_relation ? `, ${a.food_relation}` : '';
+    return `💊 <b>${a.name}</b>\n${a.dosage_qty} ${a.dosage_unit} — ${timing}${food}`;
+  }).join('\n\n');
+  const text = `Как принимать то, что вы купили:\n\n${lines}\n\nМогу присылать напоминания в удобное время, чтобы вы точно не забыли 👇`;
+  const url = WEBAPP_URL ? `${WEBAPP_URL}?reminders=1` : null;
+  const replyMarkup = url ? { inline_keyboard: [[{ text: '🔔 Включить напоминания', web_app: { url } }]] } : undefined;
+  await sendRaw(telegramId, text, replyMarkup);
+}
+
+// Отправка напоминания о приёме (вызывается планировщиком)
+async function sendReminder(telegramId, slotLabel, items) {
+  const lines = items.map(i => {
+    const food = i.food_relation ? `, ${i.food_relation}` : '';
+    return `💊 ${i.name} — ${i.dosage_qty} ${i.dosage_unit}${food}`;
+  }).join('\n');
+  const text = `⏰ Напоминание (${slotLabel})\n\nВремя принять:\n${lines}`;
+  await sendRaw(telegramId, text);
+}
+
 // ---------- Живой ИИ-диалог прямо в чате бота ----------
 // История разговора храним в памяти процесса (сбрасывается при рестарте — это нормально для чата с рекомендациями)
 const conversations = new Map(); // chatId -> [{role, content}]
@@ -151,4 +177,4 @@ function startBot() {
 
 function stopBot() { stopped = true; }
 
-module.exports = { startBot, stopBot, notifyOrderCompleted, notifyAdminsNewOrder };
+module.exports = { startBot, stopBot, notifyOrderCompleted, notifyAdminsNewOrder, notifyDosageAdvice, sendReminder };

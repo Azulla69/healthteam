@@ -12,6 +12,7 @@ const ledgerRoutes = require('./routes/ledger');
 const statsRoutes = require('./routes/stats');
 const consultantRoutes = require('./routes/consultant');
 const reviewsRoutes = require('./routes/reviews');
+const remindersRoutes = require('./routes/reminders');
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use('/api/ledger', ledgerRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/consultant', consultantRoutes);
 app.use('/api/reviews', reviewsRoutes);
+app.use('/api/reminders', remindersRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
@@ -41,6 +43,7 @@ app.get('/api/config', (req, res) => {
 });
 
 const { startBot } = require('./bot');
+const { startScheduler } = require('./scheduler');
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
@@ -49,4 +52,5 @@ app.listen(PORT, () => {
     console.warn('⚠️  BOT_TOKEN не настроен в .env — авторизация через Telegram работать не будет');
   }
   startBot();
+  startScheduler();
 });

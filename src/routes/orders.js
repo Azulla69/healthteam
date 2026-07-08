@@ -68,10 +68,32 @@ router.put('/:id/complete', requireAuth, requireAdmin, (req, res) => {
       { type: 'review_prompt', order_id: order.id }
     );
     require('../bot').notifyOrderCompleted(buyer.telegram_id, order.id).catch(() => {});
+    sendDosageAdviceAsync(order, buyer);
   }
 
   res.json(order);
 });
+
+// Не блокируем ответ админу — генерация через ИИ может занять пару секунд
+async function sendDosageAdviceAsync(order, buyer) {
+  try {
+    const ai = require('../ai');
+    if (!ai.GROQ_API_KEY) return;
+    const advice = await ai.generateDosageAdvice(order.items);
+    if (!advice || advice.length === 0) return;
+    advice.forEach(a => {
+      const matchedItem = order.items.find(i => i.name.toLowerCase().includes(a.name.toLowerCase()) || a.name.toLowerCase().includes(i.name.toLowerCase()));
+      db.addReminderItem(buyer.id, {
+        name: a.name, dosage_qty: a.dosage_qty, dosage_unit: a.dosage_unit,
+        timing: a.timing, food_relation: a.food_relation,
+        source: 'purchase', order_id: order.id, product_id: matchedItem ? matchedItem.product_id : null
+      });
+    });
+    await require('../bot').notifyDosageAdvice(buyer.telegram_id, advice);
+  } catch (e) {
+    console.error('Ошибка генерации/отправки рекомендаций по приёму:', e.message);
+  }
+}
 
 router.post('/:id/review', requireAuth, (req, res) => {
   const { product_quality, service_quality, delivery_speed, text, anonymous } = req.body;

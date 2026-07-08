@@ -20,6 +20,7 @@ const state = {
   consultantSelected: {},
   consultantEligibleIds: [], // товары из последней подборки — для показа чекбокса скидки в корзине
   reviewsData: { items: [], total: 0, avg: 0, page: 1, totalPages: 1 },
+  reminderData: { settings: null, items: [] },
 
   catalogStep: 'sections',
   selectedSection: null,
@@ -118,6 +119,13 @@ async function loadInitialData() {
       render();
     }
   }
+
+  // Открыто по кнопке "Включить напоминания" из сообщения бота: /?reminders=1
+  if (new URLSearchParams(window.location.search).get('reminders') && state.user) {
+    await loadReminders();
+    state.view = 'reminders';
+    render();
+  }
 }
 
 function openOnboardingModal() {
@@ -175,6 +183,7 @@ function render() {
   else if (state.view === 'bonusInfo') html = renderBonusInfoPage();
   else if (state.view === 'referral') html = renderReferralPage();
   else if (state.view === 'reviews') html = renderReviewsWall();
+  else if (state.view === 'reminders') html = renderReminders();
   else if (state.view === 'consultant') html = renderConsultantStub();
   else if (state.view === 'cart') html = renderCart();
   else if (state.view === 'profile') html = renderProfile();
@@ -212,6 +221,7 @@ function renderServices() {
     { id: 'bonusInfo', emoji: '🎁', name: 'Бонусная система', desc: 'Кэшбек и уровни' },
     { id: 'referral', emoji: '🤝', name: 'Реферальная система', desc: 'Приглашайте друзей' },
     { id: 'reviews', emoji: '⭐', name: 'Отзывы', desc: 'Мнения покупателей' },
+    { id: 'reminders', emoji: '⏰', name: 'Напоминания', desc: 'Когда и что принимать' },
   ];
   return `
     <div class="topbar-centered"><h1>HealthTeam</h1></div>
@@ -403,6 +413,110 @@ function renderReferralPage() {
       </div>
     </div>
   `;
+}
+
+async function loadReminders() {
+  state.reminderData = await api('/api/reminders');
+}
+
+const SLOT_LABELS_UI = { morning: '🌅 Утро', day: '☀️ День', evening: '🌙 Вечер' };
+const TIMING_LABELS_UI = { morning: 'утром', day: 'днём', evening: 'вечером' };
+
+function renderReminders() {
+  const d = state.reminderData;
+  if (!d.settings) {
+    return `
+      <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+      <div class="topbar-centered"><h1>Напоминания</h1></div>
+      <div class="empty-state"><h3>Откройте приложение в Telegram</h3></div>
+    `;
+  }
+  return `
+    <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
+    <div class="topbar-centered"><h1>Напоминания</h1></div>
+    <div class="section" style="padding-top:0">
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Бот сам напишет в Telegram в указанное время, что пора принять. Слот сработает, только если в нём есть хотя бы один препарат.</p>
+
+      ${['morning', 'day', 'evening'].map(slot => `
+        <div class="reminder-slot-card">
+          <div class="row-between">
+            <strong>${SLOT_LABELS_UI[slot]}</strong>
+            <input type="checkbox" data-slot-toggle="${slot}" ${d.settings[slot].enabled ? 'checked' : ''} />
+          </div>
+          <input type="time" data-slot-time="${slot}" value="${d.settings[slot].time}" />
+        </div>
+      `).join('')}
+
+      <div class="manage-group-title" style="padding-left:0">Что принимать</div>
+      ${d.items.length === 0 ? `<div class="empty-state"><h3>Список пуст</h3><p>Появится автоматически после покупки, или добавьте вручную</p></div>` :
+        d.items.map(i => `
+          <div class="reminder-item-row">
+            <div class="row-between">
+              <div>
+                <div class="n">${i.name}</div>
+                <div class="m">${i.dosage_qty} ${i.dosage_unit}${i.food_relation ? ', ' + i.food_relation : ''}${i.source === 'purchase' ? ' · из заказа' : ''}</div>
+                <div class="reminder-timing-tags">${i.timing.map(t => `<span class="reminder-timing-tag">${TIMING_LABELS_UI[t]}</span>`).join('')}</div>
+              </div>
+              <button class="icon-btn" data-delete-reminder-item="${i.id}">🗑</button>
+            </div>
+          </div>
+        `).join('')
+      }
+      <button class="btn btn-ghost btn-block" data-action="add-reminder-item" style="margin-top:8px">➕ Добавить своё лекарство/БАД</button>
+    </div>
+  `;
+}
+
+function openAddReminderItemModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const timing = { morning: false, day: false, evening: false };
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>Добавить в список приёма</h3>
+      <div class="field"><label>Название</label><input id="ri-name" placeholder="напр. Магний B6" /></div>
+      <div class="field"><label>Дозировка</label><input id="ri-dosage" placeholder="напр. 1 таблетка" /></div>
+      <div class="field">
+        <label>Когда принимать</label>
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="ri-morning" /> Утром</label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="ri-day" /> Днём</label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="ri-evening" /> Вечером</label>
+        </div>
+      </div>
+      <div class="field">
+        <label>Приём пищи</label>
+        <select id="ri-food">
+          <option value="">Не важно</option>
+          <option value="до еды">До еды</option>
+          <option value="после еды">После еды</option>
+          <option value="во время еды">Во время еды</option>
+        </select>
+      </div>
+      <button class="btn btn-primary btn-block" id="ri-save">Добавить</button>
+      <button class="btn btn-ghost btn-block" id="ri-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('#ri-cancel').onclick = () => backdrop.remove();
+  backdrop.querySelector('#ri-save').onclick = async () => {
+    const name = document.getElementById('ri-name').value.trim();
+    const dosageRaw = document.getElementById('ri-dosage').value.trim() || '1 шт.';
+    const parts = dosageRaw.split(' ');
+    const dosage_qty = Number(parts[0]) || 1;
+    const dosage_unit = parts.slice(1).join(' ') || 'шт.';
+    const timingSel = ['morning', 'day', 'evening'].filter(t => document.getElementById(`ri-${t}`).checked);
+    const food_relation = document.getElementById('ri-food').value;
+    if (!name) { toast('Введите название'); return; }
+    if (timingSel.length === 0) { toast('Выберите хотя бы одно время приёма'); return; }
+    try {
+      await api('/api/reminders/items', { method: 'POST', body: { name, dosage_qty, dosage_unit, timing: timingSel, food_relation } });
+      backdrop.remove();
+      await loadReminders();
+      render();
+      toast('Добавлено');
+    } catch (e) { toast('Не удалось добавить'); }
+  };
 }
 
 async function loadReviews(page = 1) {
@@ -1806,6 +1920,7 @@ function attachEvents() {
       state.view = tile.dataset.service;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
       if (state.view === 'reviews') { await loadReviews(1); }
+      if (state.view === 'reminders') { await loadReminders(); }
       render();
     };
   });
@@ -2002,6 +2117,42 @@ function attachEvents() {
       } catch (e) { toast('Не удалось удалить отзыв'); }
     };
   });
+
+  // Напоминания
+  app.querySelectorAll('[data-slot-toggle]').forEach(cb => {
+    cb.onchange = async () => {
+      try {
+        await api(`/api/reminders/slot/${cb.dataset.slotToggle}`, { method: 'PUT', body: { enabled: cb.checked } });
+        await loadReminders();
+        render();
+        toast(cb.checked ? 'Слот включён' : 'Слот выключен');
+      } catch (e) { toast('Не удалось обновить'); }
+    };
+  });
+  app.querySelectorAll('[data-slot-time]').forEach(input => {
+    input.onchange = async () => {
+      try {
+        await api(`/api/reminders/slot/${input.dataset.slotTime}`, { method: 'PUT', body: { time: input.value } });
+        await loadReminders();
+        render();
+        toast('Время обновлено');
+      } catch (e) { toast('Не удалось обновить'); }
+    };
+  });
+  const addReminderBtn = app.querySelector('[data-action="add-reminder-item"]');
+  if (addReminderBtn) addReminderBtn.onclick = () => openAddReminderItemModal();
+  app.querySelectorAll('[data-delete-reminder-item]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Удалить из списка приёма?')) return;
+      try {
+        await api(`/api/reminders/items/${btn.dataset.deleteReminderItem}`, { method: 'DELETE' });
+        await loadReminders();
+        render();
+        toast('Удалено');
+      } catch (e) { toast('Не удалось удалить'); }
+    };
+  });
+
   const toggleModeBtn = app.querySelector('[data-action="toggle-view-mode"]');
   if (toggleModeBtn) {
     toggleModeBtn.onclick = () => {

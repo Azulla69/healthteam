@@ -100,4 +100,37 @@ function extractRecommendation(raw) {
   return { text: raw, productIds: null };
 }
 
-module.exports = { GROQ_API_KEY, buildSystemPrompt, callGroq, askConsultant, CONSULTANT_MARKER_RE };
+// Генерирует рекомендации по приёму (когда/сколько/до-после еды) для списка купленных товаров.
+// Возвращает массив [{name, dosage_qty, dosage_unit, timing:['morning',...], food_relation}] либо null при сбое.
+async function generateDosageAdvice(items) {
+  const list = items.map(i => `- ${i.name}`).join('\n');
+  const prompt = `Ты — консультант магазина БАДов и спортпита. Пользователь купил следующие товары:
+${list}
+
+Для КАЖДОГО товара дай рекомендацию по приёму. Ответь СТРОГО в виде JSON-массива, без пояснений до или после, без markdown-разметки — только сам массив. Формат каждого элемента:
+{"name": "название товара как в списке выше", "dosage_qty": число_штук_за_один_приём, "dosage_unit": "капсула/таблетка/мерная ложка и т.п.", "timing": ["morning"] или ["morning","evening"] и т.д. (используй только "morning","day","evening"), "food_relation": "до еды" | "после еды" | "во время еды" | ""}
+
+Если для товара обычно достаточно приёма один раз в день — используй один элемент timing. Если по инструкции приём несколько раз в день — укажи несколько значений timing. Основывайся на общепринятых рекомендациях для такого типа добавок.`;
+
+  try {
+    const raw = await callGroq([{ role: 'user', content: prompt }]);
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed)) return null;
+    return parsed
+      .filter(p => p && p.name)
+      .map(p => ({
+        name: String(p.name),
+        dosage_qty: Number(p.dosage_qty) || 1,
+        dosage_unit: String(p.dosage_unit || 'шт.'),
+        timing: Array.isArray(p.timing) ? p.timing.filter(t => ['morning', 'day', 'evening'].includes(t)) : ['morning'],
+        food_relation: ['до еды', 'после еды', 'во время еды'].includes(p.food_relation) ? p.food_relation : ''
+      }));
+  } catch (e) {
+    console.error('Ошибка генерации рекомендаций по приёму:', e.message);
+    return null;
+  }
+}
+
+module.exports = { GROQ_API_KEY, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, CONSULTANT_MARKER_RE };

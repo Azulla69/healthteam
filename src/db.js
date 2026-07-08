@@ -83,8 +83,8 @@ function loadDefault() {
   const products = seedProducts();
   return {
     users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [], consultant_sessions: [],
-    notifications: [], reviews: [],
-    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1 }
+    notifications: [], reviews: [], reminder_items: [],
+    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1, reminder_items: 1 }
   };
 }
 
@@ -96,12 +96,14 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.consultant_sessions) data.consultant_sessions = [];
   if (!data.notifications) data.notifications = [];
   if (!data.reviews) data.reviews = [];
+  if (!data.reminder_items) data.reminder_items = [];
   if (!data.seq.ledger) data.seq.ledger = 1;
   if (!data.seq.batches) data.seq.batches = 1;
   if (!data.seq.bonus_tx) data.seq.bonus_tx = 1;
   if (!data.seq.consultant_sessions) data.seq.consultant_sessions = 1;
   if (!data.seq.notifications) data.seq.notifications = 1;
   if (!data.seq.reviews) data.seq.reviews = 1;
+  if (!data.seq.reminder_items) data.seq.reminder_items = 1;
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
@@ -109,6 +111,13 @@ if (fs.existsSync(DB_FILE)) {
     if (u.referred_by === undefined) u.referred_by = null;
     if (u.referral_milestones_awarded === undefined) u.referral_milestones_awarded = [];
     if (u.birthday_discount_used_at === undefined) u.birthday_discount_used_at = null;
+    if (u.reminders === undefined) {
+      u.reminders = {
+        morning: { time: '09:00', enabled: false, last_sent: null },
+        day: { time: '14:00', enabled: false, last_sent: null },
+        evening: { time: '20:00', enabled: false, last_sent: null }
+      };
+    }
     // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
     if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
       const now = new Date();
@@ -153,6 +162,11 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
       bonus_balance: 0, first_purchase_at: null,
       referred_by: null, referral_milestones_awarded: [], birthday_discount_used_at: null,
       admin_note: '',
+      reminders: {
+        morning: { time: '09:00', enabled: false, last_sent: null },
+        day: { time: '14:00', enabled: false, last_sent: null },
+        evening: { time: '20:00', enabled: false, last_sent: null }
+      },
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -907,6 +921,70 @@ function getReviews({ page = 1, pageSize = 10 } = {}) {
 }
 
 
+// ---------- Напоминания о приёме ----------
+const REMINDER_SLOTS = ['morning', 'day', 'evening'];
+
+function getReminderData(user) {
+  return { settings: user.reminders, items: data.reminder_items.filter(i => i.user_id === user.id) };
+}
+
+function setReminderSlot(user_id, slot, { time, enabled }) {
+  if (!REMINDER_SLOTS.includes(slot)) return { error: 'bad_slot' };
+  const user = getUser(user_id);
+  if (!user) return { error: 'not_found' };
+  if (time !== undefined) user.reminders[slot].time = time;
+  if (enabled !== undefined) user.reminders[slot].enabled = !!enabled;
+  persist();
+  return { settings: user.reminders };
+}
+
+function addReminderItem(user_id, { name, dosage_qty, dosage_unit, timing, food_relation, source, order_id, product_id }) {
+  const item = {
+    id: nextId('reminder_items'), user_id,
+    name: (name || '').trim(),
+    dosage_qty: dosage_qty || 1,
+    dosage_unit: (dosage_unit || 'шт.').trim(),
+    timing: (timing || []).filter(t => REMINDER_SLOTS.includes(t)),
+    food_relation: food_relation || '',
+    source: source || 'manual',
+    order_id: order_id || null,
+    product_id: product_id || null,
+    created_at: new Date().toISOString()
+  };
+  data.reminder_items.push(item);
+  persist();
+  return item;
+}
+
+function deleteReminderItem(id, user_id) {
+  const item = data.reminder_items.find(i => i.id === Number(id));
+  if (!item || item.user_id !== user_id) return { error: 'not_found' };
+  data.reminder_items = data.reminder_items.filter(i => i.id !== item.id);
+  persist();
+  return { ok: true };
+}
+
+// Для планировщика: пользователи, у кого нужный слот включён и время совпадает с текущим,
+// и напоминание в этот слот сегодня ещё не отправлялось
+function findDueReminders(currentHHMM, todayStr) {
+  const due = [];
+  data.users.forEach(user => {
+    REMINDER_SLOTS.forEach(slot => {
+      const s = user.reminders && user.reminders[slot];
+      if (s && s.enabled && s.time === currentHHMM && s.last_sent !== todayStr) {
+        const items = data.reminder_items.filter(i => i.user_id === user.id && i.timing.includes(slot));
+        if (items.length > 0) due.push({ user, slot, items });
+      }
+    });
+  });
+  return due;
+}
+
+function markReminderSent(user_id, slot, todayStr) {
+  const user = getUser(user_id);
+  if (user) { user.reminders[slot].last_sent = todayStr; persist(); }
+}
+
 module.exports = {
   DATA_DIR,
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown, setReferrer,
@@ -921,5 +999,6 @@ module.exports = {
   getDeliveryCost, DELIVERY_TIERS,
   createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE,
   addNotification, getNotifications, getUnreadNotificationsCount, markAllNotificationsRead,
-  submitReview, getReviews, deleteReview
+  submitReview, getReviews, deleteReview,
+  getReminderData, setReminderSlot, addReminderItem, deleteReminderItem, findDueReminders, markReminderSent, REMINDER_SLOTS
 };
