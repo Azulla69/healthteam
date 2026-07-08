@@ -1,6 +1,11 @@
 const db = require('./db');
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+// Можно указать несколько ключей через запятую в GROQ_API_KEYS (разные аккаунты Groq —
+// лимит у Groq считается на аккаунт, поэтому несколько ключей одного аккаунта не помогут,
+// а вот ключи от разных аккаунтов — да). Для обратной совместимости читаем и старую GROQ_API_KEY.
+const GROQ_API_KEYS = (process.env.GROQ_API_KEYS || process.env.GROQ_API_KEY || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const GROQ_API_KEY = GROQ_API_KEYS[0]; // для обратной совместимости мест, где просто проверяется "ключ есть"
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([^\]]+)\]\]/i;
@@ -48,12 +53,12 @@ ${catalogText}`;
 const PRIMARY_MODEL = 'llama-3.3-70b-versatile'; // качественная модель, но лимит по токенам скромнее
 const FALLBACK_MODEL = 'llama-3.1-8b-instant';    // подключается автоматически, если у основной кончился дневной лимит
 
-async function callGroq(messages, model = PRIMARY_MODEL) {
+async function callGroq(messages, model = PRIMARY_MODEL, apiKey = GROQ_API_KEY) {
   const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${GROQ_API_KEY}`
+      'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({
       model,
@@ -81,17 +86,24 @@ async function callGroq(messages, model = PRIMARY_MODEL) {
   return sanitizeReply(data.choices[0].message.content);
 }
 
-// Сначала пробуем качественную модель; если у неё кончился дневной лимит (429) — тихо переключаемся на резервную
+// Пробуем все ключи на качественной модели по очереди; если ВСЕ упёрлись в лимит —
+// пробуем их же на резервной (более лёгкой) модели, у которой лимит обычно выше
 async function callGroqSmart(messages) {
-  try {
-    return await callGroq(messages, PRIMARY_MODEL);
-  } catch (e) {
-    if (e.status === 429) {
-      console.warn('Лимит основной модели исчерпан, переключаюсь на резервную модель');
-      return await callGroq(messages, FALLBACK_MODEL);
+  const attempts = [
+    ...GROQ_API_KEYS.map(key => ({ key, model: PRIMARY_MODEL })),
+    ...GROQ_API_KEYS.map(key => ({ key, model: FALLBACK_MODEL }))
+  ];
+  let lastError;
+  for (const { key, model } of attempts) {
+    try {
+      return await callGroq(messages, model, key);
+    } catch (e) {
+      lastError = e;
+      if (e.status !== 429) throw e; // не лимит — значит реальная ошибка, дальше пробовать бессмысленно
+      console.warn(`Лимит исчерпан (ключ …${key.slice(-4)}, модель ${model}) — пробую следующий вариант`);
     }
-    throw e;
   }
+  throw lastError;
 }
 
 // Подстраховка от известной особенности Llama — иногда вставляет случайные иероглифы
