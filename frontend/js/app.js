@@ -104,6 +104,20 @@ async function loadInitialData() {
   if (reviewOrderId && state.user) {
     openReviewForm(Number(reviewOrderId));
   }
+
+  // Открыто по кнопке из чата с ИИ-консультантом в Telegram: /?consultant_ids=1,2,3
+  const consultantIdsParam = new URLSearchParams(window.location.search).get('consultant_ids');
+  if (consultantIdsParam && state.user) {
+    const ids = consultantIdsParam.split(',').map(Number).filter(Boolean);
+    const products = ids.map(id => state.products.find(p => p.id === id)).filter(Boolean);
+    if (products.length > 0) {
+      state.consultantProducts = products;
+      state.consultantSelected = {};
+      state.consultantStep = 'result';
+      state.view = 'consultant';
+      render();
+    }
+  }
 }
 
 function openOnboardingModal() {
@@ -194,7 +208,7 @@ function renderTabbar() {
 function renderServices() {
   const tiles = [
     { id: 'catalog', emoji: '🌿', name: 'Каталог', desc: 'БАДы и спортивное питание' },
-    { id: 'consultant', emoji: '🧬', name: 'Бот-консультант', desc: 'Подбор добавок под вас' },
+    { id: 'consultant', emoji: '🧬', name: 'Бот-консультант', desc: 'Откроет диалог в Telegram' },
     { id: 'bonusInfo', emoji: '🎁', name: 'Бонусная система', desc: 'Кэшбек и уровни' },
     { id: 'referral', emoji: '🤝', name: 'Реферальная система', desc: 'Приглашайте друзей' },
     { id: 'reviews', emoji: '⭐', name: 'Отзывы', desc: 'Мнения покупателей' },
@@ -1776,9 +1790,14 @@ function attachEvents() {
   // Сервисы: переход к разделу
   app.querySelectorAll('[data-service]').forEach(tile => {
     tile.onclick = async () => {
+      if (tile.dataset.service === 'consultant') {
+        const link = `https://t.me/${state.botUsername}?start=assistant`;
+        if (tg && tg.openTelegramLink) tg.openTelegramLink(link);
+        else window.open(link, '_blank');
+        return;
+      }
       state.view = tile.dataset.service;
       if (state.view === 'catalog') { state.catalogStep = 'sections'; state.selectedSection = null; state.selectedSubcategory = null; state.selectedBrand = null; state.searchQuery = ''; }
-      if (state.view === 'consultant') { state.consultantStep = 'intro'; state.consultantChat = { messages: [], loading: false, error: false }; state.consultantSelected = {}; }
       if (state.view === 'reviews') { await loadReviews(1); }
       render();
     };

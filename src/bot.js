@@ -1,18 +1,27 @@
+const ai = require('./ai');
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL;
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-const WELCOME_TEXT = `Привет! 👋 Добро пожаловать в <b>HealthTeam</b> — магазин БАДов и спортивного питания.
+const WELCOME_TEXT = `Привет! 👋 Я бот-помощник магазина <b>HealthTeam</b> — БАДы, витамины и спортивное питание.
 
 Что у нас есть:
 🌿 <b>Каталог</b> — БАДы и спортпит с поиском, фильтром по производителю и сортировкой
-🎁 <b>Бонусная система</b> — кэшбек 3–10% с каждой покупки в зависимости от вашего уровня, действует 3 месяца
-🤝 <b>Реферальная система</b> — приглашайте друзей и получайте 5% с их покупок навсегда + бонусы за лесенку приглашений
-🎂 <b>Скидка на день рождения</b> — 15% на один заказ, действует 15 дней вокруг вашего ДР
-🚚 <b>Доставка</b> — от 0 до 300₽ в зависимости от суммы заказа, от 1500₽ — бесплатно
-🧬 <b>Бот-консультант</b> — скоро поможет подобрать добавки именно под вас
+🎁 <b>Бонусная система</b> — кэшбек 3–10% с каждой покупки, действует 3 месяца
+🤝 <b>Реферальная система</b> — приглашайте друзей и получайте 5% с их покупок навсегда
+🎂 <b>Скидка на день рождения</b> — 15% на один заказ
+🚚 <b>Доставка</b> — от 0 до 300₽, от 1500₽ — бесплатно
 
-Жмите кнопку ниже, чтобы открыть магазин 👇`;
+Жмите кнопку ниже, чтобы открыть магазин 👇
+
+А ещё можно просто написать мне прямо сюда, чем вы занимаетесь и какая у вас цель — я подберу подходящие БАДы и спортпит и всё подробно расскажу, не выходя из этого чата 💬`;
+
+const ASSISTANT_INTRO_TEXT = `Привет! Меня зовут Бот-помощник HealthTeam 🤖
+
+Готов выслушать все твои пожелания и подобрать то, что реально нужно — БАДы, витамины или спортпит под твои цели.
+
+Расскажи: чем занимаешься, какая цель (похудение, набор массы, энергия, форма), каким спортом занимаешься и какой у тебя рост и вес — и я всё подберу 💪`;
 
 function keyboard() {
   return {
@@ -35,10 +44,6 @@ async function sendRaw(chatId, text, replyMarkup) {
   } catch (e) {
     console.error('Ошибка отправки сообщения ботом:', e.message);
   }
-}
-
-async function sendMessage(chatId) {
-  await sendRaw(chatId, WELCOME_TEXT, keyboard());
 }
 
 // Отправляется автоматически, когда заказ переходит в статус "Выполнено"
@@ -66,6 +71,50 @@ async function notifyAdminsNewOrder(order, buyer) {
   }
 }
 
+// ---------- Живой ИИ-диалог прямо в чате бота ----------
+// История разговора храним в памяти процесса (сбрасывается при рестарте — это нормально для чата с рекомендациями)
+const conversations = new Map(); // chatId -> [{role, content}]
+
+async function handleUserMessage(chatId, text) {
+  if (text.startsWith('/start')) {
+    conversations.delete(chatId);
+    const payload = text.split(' ')[1];
+    if (payload === 'assistant') {
+      await sendRaw(chatId, ASSISTANT_INTRO_TEXT);
+    } else {
+      await sendRaw(chatId, WELCOME_TEXT, keyboard());
+    }
+    return;
+  }
+
+  if (!ai.GEMINI_API_KEY) {
+    await sendRaw(chatId, 'ИИ-консультант сейчас недоступен — но вы можете открыть магазин кнопкой ниже 👇', keyboard());
+    return;
+  }
+
+  const history = conversations.get(chatId) || [];
+  history.push({ role: 'user', content: text.slice(0, 2000) });
+  if (history.length > 40) history.splice(0, history.length - 40);
+
+  try {
+    const { text: reply, productIds } = await ai.askConsultant(history);
+    history.push({ role: 'assistant', content: reply });
+    conversations.set(chatId, history);
+
+    await sendRaw(chatId, reply);
+
+    if (productIds && productIds.length > 0 && WEBAPP_URL) {
+      const url = `${WEBAPP_URL}?consultant_ids=${productIds.join(',')}`;
+      await sendRaw(chatId, 'Собрал для вас подборку со скидкой 10% 👇', {
+        inline_keyboard: [[{ text: '🛒 Добавить в корзину со скидкой', web_app: { url } }]]
+      });
+    }
+  } catch (e) {
+    console.error('Ошибка ИИ в боте:', e.message);
+    await sendRaw(chatId, 'Извините, не получилось ответить — попробуйте ещё раз чуть позже 🙏');
+  }
+}
+
 let offset = 0;
 let stopped = false;
 
@@ -77,9 +126,8 @@ async function poll() {
     if (data.ok) {
       for (const update of data.result) {
         offset = update.update_id + 1;
-        // Отвечаем на любое входящее сообщение (в т.ч. /start при первом входе в чат)
-        if (update.message) {
-          sendMessage(update.message.chat.id);
+        if (update.message && update.message.text) {
+          handleUserMessage(update.message.chat.id, update.message.text);
         }
       }
     }
@@ -91,13 +139,13 @@ async function poll() {
 
 function startBot() {
   if (!BOT_TOKEN || BOT_TOKEN.includes('Example')) {
-    console.warn('⚠️  BOT_TOKEN не настроен — бот-приветствие не запущен (веб-приложение при этом работает как обычно)');
+    console.warn('⚠️  BOT_TOKEN не настроен — бот не запущен (веб-приложение при этом работает как обычно)');
     return;
   }
   if (!WEBAPP_URL) {
     console.warn('⚠️  WEBAPP_URL не задан — кнопка в приветствии бота будет вести на t.me вместо вашего магазина');
   }
-  console.log('🤖 Бот-приветствие запущен (long polling)');
+  console.log('🤖 Бот запущен (long polling)');
   poll();
 }
 
