@@ -44,11 +44,24 @@ async function callGemini(messages) {
       model: 'gemini-2.5-flash',
       messages,
       temperature: 0.7,
-      max_tokens: 1500
+      max_tokens: 1500,
+      reasoning_effort: 'low'
     })
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'gemini_error');
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error(`gemini_bad_response (status ${res.status}, не JSON)`);
+  }
+  if (!res.ok) {
+    console.error('Полный ответ Gemini при ошибке:', JSON.stringify(data));
+    throw new Error(`gemini_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
+  }
+  if (!data.choices || !data.choices[0]) {
+    console.error('Неожиданный формат ответа Gemini:', JSON.stringify(data));
+    throw new Error('gemini_unexpected_format');
+  }
   return data.choices[0].message.content;
 }
 
