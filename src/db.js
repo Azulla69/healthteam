@@ -493,6 +493,7 @@ function adminOrUserCancel(id, { isAdmin } = {}) {
   if (order.status === 'completed') {
     data.ledger = data.ledger.filter(e => !(e.order_id === order.id && e.auto));
     revokeEarnedForOrder(order.id);
+    removeReviewForOrder(order.id);
   }
   data.orders = data.orders.filter(o => o.id !== order.id);
   data.order_items = data.order_items.filter(i => i.order_id !== order.id);
@@ -586,11 +587,38 @@ function refundBonuses(user_id, amount, order_id) {
 // Аннулирует начисленный за заказ кэшбек/реферальный бонус (при отмене выполненного заказа)
 function revokeEarnedForOrder(order_id) {
   data.bonus_tx.forEach(t => {
-    if (t.order_id === order_id && ['cashback', 'referral'].includes(t.type) && t.remaining > 0) {
+    if (t.order_id === order_id && ['cashback', 'referral', 'referral_ladder', 'review'].includes(t.type) && t.remaining > 0) {
       t.remaining = 0;
       t.revoked = true;
     }
   });
+}
+
+// Удаляет отзыв, привязанный к заказу (если был), и аннулирует бонус за него.
+// Возвращает заказу возможность получить новый отзыв (reviewed = false).
+function removeReviewForOrder(order_id) {
+  const review = data.reviews.find(r => r.order_id === order_id);
+  if (!review) return;
+  data.reviews = data.reviews.filter(r => r.id !== review.id);
+  data.bonus_tx.forEach(t => {
+    if (t.order_id === order_id && t.type === 'review' && t.remaining > 0) { t.remaining = 0; t.revoked = true; }
+  });
+  const order = getOrderRaw(order_id);
+  if (order) order.reviewed = false;
+}
+
+// Ручное удаление отзыва администратором (не связано с удалением заказа)
+function deleteReview(review_id) {
+  const review = data.reviews.find(r => r.id === Number(review_id));
+  if (!review) return { error: 'not_found' };
+  data.reviews = data.reviews.filter(r => r.id !== review.id);
+  data.bonus_tx.forEach(t => {
+    if (t.order_id === review.order_id && t.type === 'review' && t.remaining > 0) { t.remaining = 0; t.revoked = true; }
+  });
+  const order = getOrderRaw(review.order_id);
+  if (order) order.reviewed = false;
+  persist();
+  return { ok: true };
 }
 
 function getBonusHistory(user_id) {
@@ -839,6 +867,7 @@ function markAllNotificationsRead(user_id) {
 
 // ---------- Отзывы ----------
 function submitReview(order_id, user_id, { product_quality, service_quality, delivery_speed, text, anonymous }) {
+  order_id = Number(order_id);
   const order = getOrderRaw(order_id);
   if (!order) return { error: 'not_found' };
   if (order.user_id !== user_id) return { error: 'forbidden' };
@@ -890,5 +919,5 @@ module.exports = {
   getDeliveryCost, DELIVERY_TIERS,
   createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE,
   addNotification, getNotifications, getUnreadNotificationsCount, markAllNotificationsRead,
-  submitReview, getReviews
+  submitReview, getReviews, deleteReview
 };

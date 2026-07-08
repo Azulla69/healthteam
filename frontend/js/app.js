@@ -427,6 +427,7 @@ function renderReviewsWall() {
               <span>Доставка: ${r.delivery_speed}/10</span>
             </div>
             ${r.text ? `<p style="font-size:13px;line-height:1.5">${r.text}</p>` : ''}
+            ${effectiveAdmin() ? `<button class="btn btn-danger" style="padding:6px 12px;font-size:12px;margin-top:8px" data-delete-review="${r.id}">Удалить отзыв</button>` : ''}
           </div>
         `).join('')
       }
@@ -1923,6 +1924,17 @@ function attachEvents() {
   if (reviewsPrevBtn) reviewsPrevBtn.onclick = async () => { await loadReviews(state.reviewsData.page - 1); render(); };
   const reviewsNextBtn = app.querySelector('[data-action="reviews-next"]');
   if (reviewsNextBtn) reviewsNextBtn.onclick = async () => { await loadReviews(state.reviewsData.page + 1); render(); };
+  app.querySelectorAll('[data-delete-review]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Удалить этот отзыв? Бонус за него у пользователя будет аннулирован.')) return;
+      try {
+        await api(`/api/reviews/${btn.dataset.deleteReview}`, { method: 'DELETE' });
+        toast('Отзыв удалён');
+        await loadReviews(state.reviewsData.page);
+        render();
+      } catch (e) { toast('Не удалось удалить отзыв'); }
+    };
+  });
   const toggleModeBtn = app.querySelector('[data-action="toggle-view-mode"]');
   if (toggleModeBtn) {
     toggleModeBtn.onclick = () => {
