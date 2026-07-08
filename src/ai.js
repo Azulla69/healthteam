@@ -1,7 +1,7 @@
 const db = require('./db');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([\d,\s]+)\]\]/i;
 
@@ -33,42 +33,41 @@ function buildSystemPrompt() {
 ${catalogText}`;
 }
 
-async function callGemini(messages) {
-  const res = await fetch(GEMINI_URL, {
+async function callGroq(messages) {
+  const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${GEMINI_API_KEY}`
+      'Authorization': `Bearer ${GROQ_API_KEY}`
     },
     body: JSON.stringify({
-      model: 'gemini-2.5-flash',
+      model: 'llama-3.3-70b-versatile',
       messages,
       temperature: 0.7,
-      max_tokens: 1500,
-      reasoning_effort: 'low'
+      max_tokens: 1500
     })
   });
   let data;
   try {
     data = await res.json();
   } catch (e) {
-    throw new Error(`gemini_bad_response (status ${res.status}, не JSON)`);
+    throw new Error(`groq_bad_response (status ${res.status}, не JSON)`);
   }
   if (!res.ok) {
-    console.error('Полный ответ Gemini при ошибке:', JSON.stringify(data));
-    throw new Error(`gemini_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
+    console.error('Полный ответ Groq при ошибке:', JSON.stringify(data));
+    throw new Error(`groq_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
   }
   if (!data.choices || !data.choices[0]) {
-    console.error('Неожиданный формат ответа Gemini:', JSON.stringify(data));
-    throw new Error('gemini_unexpected_format');
+    console.error('Неожиданный формат ответа Groq:', JSON.stringify(data));
+    throw new Error('groq_unexpected_format');
   }
   return data.choices[0].message.content;
 }
 
-// Отправляет всю историю разговора в Gemini и возвращает { text, productIds }
+// Отправляет всю историю разговора в Groq и возвращает { text, productIds }
 // productIds не null, только когда ИИ закончил подбор и вставил маркер рекомендации
 async function askConsultant(historyMessages) {
-  const raw = await callGemini([{ role: 'system', content: buildSystemPrompt() }, ...historyMessages]);
+  const raw = await callGroq([{ role: 'system', content: buildSystemPrompt() }, ...historyMessages]);
   const match = raw.match(CONSULTANT_MARKER_RE);
   let productIds = null;
   let text = raw;
@@ -79,4 +78,4 @@ async function askConsultant(historyMessages) {
   return { text, productIds };
 }
 
-module.exports = { GEMINI_API_KEY, buildSystemPrompt, callGemini, askConsultant, CONSULTANT_MARKER_RE };
+module.exports = { GROQ_API_KEY, buildSystemPrompt, callGroq, askConsultant, CONSULTANT_MARKER_RE };

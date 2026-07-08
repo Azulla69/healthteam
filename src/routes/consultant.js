@@ -6,7 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const router = express.Router();
 
 router.post('/chat', requireAuth, async (req, res) => {
-  if (!ai.GEMINI_API_KEY) return res.status(503).json({ error: 'ai_not_configured' });
+  if (!ai.GROQ_API_KEY) return res.status(503).json({ error: 'ai_not_configured' });
   const { messages } = req.body;
   if (!Array.isArray(messages) || messages.length > 40) {
     return res.status(400).json({ error: 'bad_messages' });
@@ -20,7 +20,7 @@ router.post('/chat', requireAuth, async (req, res) => {
     const reply = productIds ? `${text}\n[[РЕКОМЕНДАЦИЯ: ${productIds.join(',')}]]` : text;
     res.json({ reply });
   } catch (e) {
-    console.error('Ошибка обращения к Gemini:', e.message);
+    console.error('Ошибка обращения к Groq:', e.message);
     res.status(500).json({ error: 'ai_error' });
   }
 });

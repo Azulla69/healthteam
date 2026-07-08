@@ -88,7 +88,7 @@ async function handleUserMessage(chatId, text) {
       return;
     }
 
-    if (!ai.GEMINI_API_KEY) {
+    if (!ai.GROQ_API_KEY) {
       await sendRaw(chatId, 'ИИ-консультант сейчас недоступен — но вы можете открыть магазин кнопкой ниже 👇', keyboard());
       return;
     }
