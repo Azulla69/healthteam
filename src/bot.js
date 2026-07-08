@@ -121,7 +121,7 @@ async function handleUserMessage(chatId, text) {
 
     const history = conversations.get(chatId) || [];
     history.push({ role: 'user', content: text.slice(0, 2000) });
-    if (history.length > 40) history.splice(0, history.length - 40);
+    if (history.length > 16) history.splice(0, history.length - 16);
 
     const { text: reply, productIds } = await ai.askConsultant(history);
     history.push({ role: 'assistant', content: reply });
