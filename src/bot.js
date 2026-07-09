@@ -143,6 +143,7 @@ async function handleUserMessage(chatId, text, from = {}) {
     }
 
     const history = conversations.get(chatId) || [];
+    const isFirstMessage = history.length === 0;
     history.push({ role: 'user', content: text.slice(0, 2000) });
     if (history.length > 16) history.splice(0, history.length - 16);
 
@@ -150,7 +151,8 @@ async function handleUserMessage(chatId, text, from = {}) {
     history.push({ role: 'assistant', content: reply });
     conversations.set(chatId, history);
 
-    await sendRaw(chatId, reply);
+    const finalReply = isFirstMessage ? `${reply}\n\n${db.getTemplate('life_goals_question')}` : reply;
+    await sendRaw(chatId, finalReply);
 
     if (productIds && productIds.length > 0 && WEBAPP_URL) {
       const url = `${WEBAPP_URL}?consultant_ids=${productIds.join(',')}`;
