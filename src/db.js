@@ -75,7 +75,8 @@ function seedProducts() {
     id: i + 1, name: item.name, description: item.description, price: item.price,
     section: item.section, category: item.category, brand: item.brand,
     image_url: '', stock: item.stock, active: true, created_at: now,
-    batches: item.stock > 0 ? [{ id: i + 1, qty: item.stock, expiry: null, created_at: now }] : []
+    batches: item.stock > 0 ? [{ id: i + 1, qty: item.stock, expiry: null, created_at: now }] : [],
+    ozon_url: '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null
   }));
 }
 
@@ -159,6 +160,13 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.seq.reviews) data.seq.reviews = 1;
   if (!data.seq.reminder_items) data.seq.reminder_items = 1;
   if (!data.seq.bot_chat_logs) data.seq.bot_chat_logs = 1;
+  data.products.forEach(p => {
+    if (p.ozon_url === undefined) p.ozon_url = '';
+    if (p.ozon_price === undefined) p.ozon_price = null;
+    if (p.ozon_checked_at === undefined) p.ozon_checked_at = null;
+    if (p.ozon_check_status === undefined) p.ozon_check_status = 'never';
+    if (p.ozon_check_error === undefined) p.ozon_check_error = null;
+  });
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
@@ -180,6 +188,9 @@ if (fs.existsSync(DB_FILE)) {
     if (u.webapp_opened_at === undefined) u.webapp_opened_at = u.created_at || new Date().toISOString();
     if (u.bot_chat_nudge_due_at === undefined) u.bot_chat_nudge_due_at = null;
     if (u.webapp_nudge_sent === undefined) u.webapp_nudge_sent = true;
+    if (u.last_idle_nudge_at === undefined) u.last_idle_nudge_at = null;
+    if (u.last_cart_nudge_at === undefined) u.last_cart_nudge_at = null;
+    if (u.last_webapp_nudge_at === undefined) u.last_webapp_nudge_at = null;
     // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
     if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
       const now = new Date();
@@ -233,6 +244,7 @@ function upsertUser({ telegram_id, username, first_name, last_name, viaWebapp = 
       idle_check_due_at: null, idle_nudge_sent: true, cart_updated_at: null, cart_nudge_sent: true,
       webapp_opened_at: viaWebapp ? new Date().toISOString() : null,
       bot_chat_nudge_due_at: null, webapp_nudge_sent: true,
+      last_idle_nudge_at: null, last_cart_nudge_at: null, last_webapp_nudge_at: null,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -254,9 +266,13 @@ function markWebappOpened(user) {
 function recordBotChat({ telegram_id, username, first_name, last_name }) {
   const user = upsertUser({ telegram_id, username, first_name, last_name, viaWebapp: false });
   if (!user.webapp_opened_at) {
-    user.bot_chat_nudge_due_at = new Date(Date.now() + 60 * 60000).toISOString();
-    user.webapp_nudge_sent = false;
-    persist();
+    const now = new Date();
+    const cooldownOk = !user.last_webapp_nudge_at || (now - new Date(user.last_webapp_nudge_at)) > 24 * 3600000;
+    if (cooldownOk) {
+      user.bot_chat_nudge_due_at = new Date(now.getTime() + 60 * 60000).toISOString();
+      user.webapp_nudge_sent = false;
+      persist();
+    }
   }
   return user;
 }
@@ -268,7 +284,7 @@ function findDueWebappNudges(now = new Date()) {
 }
 function markWebappNudgeSent(user_id) {
   const user = getUser(user_id);
-  if (user) { user.webapp_nudge_sent = true; persist(); }
+  if (user) { user.webapp_nudge_sent = true; user.last_webapp_nudge_at = new Date().toISOString(); persist(); }
 }
 
 // Привязывает пользователя к пригласившему (один раз, при первом визите по реф-ссылке)
@@ -330,7 +346,8 @@ function createProduct(fields) {
     id: nextId('products'), name: fields.name, description: fields.description || '',
     price: Number(fields.price), section: fields.section || '', category: fields.category || '',
     brand: fields.brand || '', image_url: fields.image_url || '',
-    stock: 0, batches: [], active: true, created_at: new Date().toISOString()
+    stock: 0, batches: [], active: true, created_at: new Date().toISOString(),
+    ozon_url: fields.ozon_url || '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null
   };
   data.products.push(product);
   persist();
@@ -348,11 +365,41 @@ function updateProduct(id, fields) {
     category: fields.category ?? product.category,
     brand: fields.brand ?? product.brand,
     image_url: fields.image_url ?? product.image_url,
-    active: fields.active != null ? !!fields.active : product.active
+    active: fields.active != null ? !!fields.active : product.active,
+    ozon_url: fields.ozon_url ?? product.ozon_url
     // stock сюда намеренно не попадает — меняется только через addStock/removeStock
   });
   persist();
   return product;
+}
+
+// Записывает результат попытки сверки цены с Ozon (успех или ошибка)
+function recordOzonCheckResult(id, { price, status, error }) {
+  const product = getProduct(id);
+  if (!product) return null;
+  product.ozon_checked_at = new Date().toISOString();
+  product.ozon_check_status = status;
+  product.ozon_check_error = error || null;
+  if (status === 'ok' && price != null) product.ozon_price = price;
+  persist();
+  return product;
+}
+
+// Сводка по всем товарам, у которых указана ссылка на Ozon — для админ-страницы сравнения цен
+function getOzonComparison() {
+  return data.products
+    .filter(p => p.ozon_url)
+    .map(p => {
+      const diffPercent = (p.ozon_price && p.price)
+        ? Math.round(((p.ozon_price - p.price) / p.ozon_price) * 1000) / 10
+        : null;
+      return {
+        id: p.id, name: p.name, brand: p.brand, our_price: p.price,
+        ozon_url: p.ozon_url, ozon_price: p.ozon_price, diff_percent: diffPercent,
+        checked_at: p.ozon_checked_at, status: p.ozon_check_status, error: p.ozon_check_error
+      };
+    })
+    .sort((a, b) => (a.checked_at || '') < (b.checked_at || '') ? 1 : -1);
 }
 
 function hideProduct(id) {
@@ -1109,17 +1156,22 @@ const CART_NUDGE_MINUTES = 30;
 function pingAppOpen(user_id) {
   const user = getUser(user_id);
   if (!user) return;
-  const due = new Date(Date.now() + IDLE_NUDGE_MINUTES * 60000).toISOString();
-  user.idle_check_due_at = due;
-  user.idle_nudge_sent = false;
+  const now = new Date();
+  const cooldownOk = !user.last_idle_nudge_at || (now - new Date(user.last_idle_nudge_at)) > 24 * 3600000;
+  if (cooldownOk) {
+    user.idle_check_due_at = new Date(now.getTime() + IDLE_NUDGE_MINUTES * 60000).toISOString();
+    user.idle_nudge_sent = false;
+  }
   persist();
 }
 
 function touchCart(user_id) {
   const user = getUser(user_id);
   if (!user) return;
-  user.cart_updated_at = new Date().toISOString();
-  user.cart_nudge_sent = false;
+  const now = new Date();
+  user.cart_updated_at = now.toISOString();
+  const cooldownOk = !user.last_cart_nudge_at || (now - new Date(user.last_cart_nudge_at)) > 24 * 3600000;
+  if (cooldownOk) user.cart_nudge_sent = false;
   // Раз человек что-то делает в приложении — не идле, не шлём "ты ничего не выбрал"
   user.idle_check_due_at = null;
   persist();
@@ -1138,7 +1190,7 @@ function findDueIdleNudges(now = new Date()) {
 }
 function markIdleNudgeSent(user_id) {
   const user = getUser(user_id);
-  if (user) { user.idle_nudge_sent = true; persist(); }
+  if (user) { user.idle_nudge_sent = true; user.last_idle_nudge_at = new Date().toISOString(); persist(); }
 }
 
 function findDueCartNudges(now = new Date()) {
@@ -1149,7 +1201,7 @@ function findDueCartNudges(now = new Date()) {
 }
 function markCartNudgeSent(user_id) {
   const user = getUser(user_id);
-  if (user) { user.cart_nudge_sent = true; persist(); }
+  if (user) { user.cart_nudge_sent = true; user.last_cart_nudge_at = new Date().toISOString(); persist(); }
 }
 
 // ---------- Логи переписки с ботом ----------
@@ -1214,6 +1266,7 @@ module.exports = {
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown, setReferrer,
   getProducts, getProduct, createProduct, updateProduct, hideProduct, deleteProductHard,
   addStock, removeStock, sanitizeProduct, nearestExpiry,
+  recordOzonCheckResult, getOzonComparison,
   createOrder, createManualOrder, getOrdersByUser, getAllOrders, getUserStats,
   getOrderRaw, updateOrder, adminOrUserCancel, moveToDelivering, moveToCompleted, setOrderPaid,
   countActiveOrders, MAX_ACTIVE_ORDERS,

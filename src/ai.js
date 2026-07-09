@@ -200,4 +200,24 @@ ${list}
   }
 }
 
-module.exports = { GROQ_API_KEY, HAS_AI, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, CONSULTANT_MARKER_RE };
+// Генерирует подробное продающее описание товара по названию/бренду/категории
+async function generateProductDescription({ name, brand, section, category }) {
+  const prompt = `Ты — копирайтер интернет-магазина БАДов и спортивного питания HealthTeam. Напиши подробное описание товара для карточки в каталоге.
+
+Товар: ${name}
+Производитель: ${brand || 'не указан'}
+Раздел: ${section || ''} / ${category || ''}
+
+Требования:
+- 3-5 предложений
+- Расскажи, для чего товар нужен, какую пользу приносит, кому подойдёт
+- Упомяни, как принимать (в общих словах, без точных дозировок — это не медицинская консультация)
+- Пиши живо и по-человечески, без канцелярита и без "воды"
+- Не используй markdown-разметку, только обычный текст
+- Ответь ТОЛЬКО текстом описания, без вступлений вроде "Вот описание:"`;
+
+  const raw = await callGroqSmart([{ role: 'user', content: prompt }]);
+  return sanitizeReply(raw.trim());
+}
+
+module.exports = { GROQ_API_KEY, HAS_AI, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, generateProductDescription, CONSULTANT_MARKER_RE };

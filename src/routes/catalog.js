@@ -54,6 +54,23 @@ router.put('/:id', requireAdmin, (req, res) => {
   res.json(updated);
 });
 
+// Генерирует подробное описание товара через ИИ (не сохраняет — просто возвращает текст на предпросмотр)
+router.post('/:id/generate-description', requireAdmin, async (req, res) => {
+  const product = db.getProduct(req.params.id);
+  if (!product) return res.status(404).json({ error: 'not_found' });
+  const ai = require('../ai');
+  if (!ai.HAS_AI) return res.status(503).json({ error: 'ai_not_configured' });
+  try {
+    const description = await ai.generateProductDescription({
+      name: product.name, brand: product.brand, section: product.section, category: product.category
+    });
+    res.json({ description });
+  } catch (e) {
+    console.error('Ошибка генерации описания товара:', e.message);
+    res.status(500).json({ error: 'ai_error' });
+  }
+});
+
 router.delete('/:id', requireAdmin, (req, res) => {
   if (req.query.hard === 'true') {
     db.deleteProductHard(req.params.id);

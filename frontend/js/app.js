@@ -38,6 +38,7 @@ const state = {
   statsData: null,
   botMessagesData: [],
   botLogsUsers: [],
+  ozonData: [],
 };
 
 const STATUS_LABELS = { processing: 'Принято в обработку', delivering: 'Доставляем', completed: 'Выполнено', cancelled: 'Отменён' };
@@ -1220,6 +1221,7 @@ const MANAGE_TILES = [
   { id: 'stats', label: 'Статистика', emoji: '📊' },
   { id: 'botmsg', label: 'Бот', emoji: '🤖' },
   { id: 'botlogs', label: 'Логи', emoji: '📜' },
+  { id: 'ozon', label: 'Цены Ozon', emoji: '🛒' },
 ];
 
 function renderManage() {
@@ -1248,6 +1250,7 @@ function renderManage() {
   else if (state.manageSection === 'stats') inner = renderManageStats();
   else if (state.manageSection === 'botmsg') inner = renderManageBotMessages();
   else if (state.manageSection === 'botlogs') inner = renderManageBotLogs();
+  else if (state.manageSection === 'ozon') inner = renderManageOzon();
 
   return `
     <div class="topbar"><div><div class="eyebrow">Управление</div><h1>${title}</h1></div></div>
@@ -1810,6 +1813,43 @@ function renderManageBotLogs() {
   `;
 }
 
+// ---- Управление: Сравнение цен с Ozon ----
+async function loadOzonComparison() {
+  state.ozonData = await api('/api/ozon/summary');
+}
+
+const OZON_STATUS_LABEL = { never: 'Ещё не проверялось', ok: 'Проверено', failed: 'Ошибка' };
+
+function renderManageOzon() {
+  const items = state.ozonData;
+  return `
+    <p style="font-size:13px;color:var(--ink-soft);padding:0 16px 10px">Проверка идёт автоматически раз в сутки. Чтобы добавить товар сюда — укажите ссылку на Ozon в его карточке в каталоге.</p>
+    <div style="padding:0 16px 12px">
+      <button class="btn btn-primary btn-block" data-action="ozon-check-all">🔄 Проверить все сейчас</button>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state"><h3>Пока нет товаров со ссылкой на Ozon</h3><p>Откройте товар в каталоге и вставьте ссылку в поле «Ссылка на товар в Ozon»</p></div>` :
+      items.map(p => {
+        const diffColor = p.diff_percent == null ? 'var(--ink-soft)' : p.diff_percent >= 10 ? '#1F7A45' : p.diff_percent >= 0 ? 'var(--amber-dark)' : 'var(--danger)';
+        return `
+        <div class="list-item">
+          <div class="row-between"><strong>${p.name}</strong><span style="font-size:11px;color:var(--ink-soft)">${OZON_STATUS_LABEL[p.status]}</span></div>
+          <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${p.brand || ''}</div>
+          <div class="row-between" style="font-size:13px">
+            <span>Наша цена: <strong>${p.our_price} ₽</strong></span>
+            <span>Ozon: <strong>${p.ozon_price != null ? p.ozon_price + ' ₽' : '—'}</strong></span>
+          </div>
+          ${p.diff_percent != null ? `<div style="font-size:13px;color:${diffColor};margin-top:4px">Мы дешевле на ${p.diff_percent}%</div>` : ''}
+          ${p.status === 'failed' ? `<div style="font-size:12px;color:var(--danger);margin-top:4px">${p.error || 'Не удалось получить цену'}</div>` : ''}
+          <div class="row-between" style="margin-top:8px">
+            <span style="font-size:11px;color:var(--ink-soft)">${p.checked_at ? 'Проверено: ' + fmtDate(p.checked_at) : 'Ещё не проверялось'}</span>
+            <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" data-ozon-check="${p.id}">Проверить</button>
+          </div>
+        </div>
+      `;}).join('')
+    }
+  `;
+}
+
 async function openBotChatModal(telegramId) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -1883,8 +1923,13 @@ function openProductModal(product) {
         <input id="pf-category" list="dl-categories" value="${product?.category || ''}" placeholder="напр. Витамины и минералы" />
         <datalist id="dl-categories">${categories.map(c => `<option value="${c}">`).join('')}</datalist>
       </div>
-      <div class="field"><label>Описание</label><textarea id="pf-description">${product?.description || ''}</textarea></div>
+      <div class="field">
+        <label>Описание</label>
+        <textarea id="pf-description">${product?.description || ''}</textarea>
+        ${isEdit ? `<button class="btn btn-ghost" id="pf-gen-desc" style="margin-top:6px;font-size:13px;padding:8px 14px">✨ Сгенерировать через ИИ</button>` : `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px">Сохраните товар, чтобы можно было сгенерировать описание через ИИ</div>`}
+      </div>
       <div class="field"><label>Цена, ₽</label><input id="pf-price" type="number" value="${product?.price ?? ''}" /></div>
+      <div class="field"><label>Ссылка на товар в Ozon (для авто-сверки цен)</label><input id="pf-ozon-url" value="${product?.ozon_url || ''}" placeholder="https://www.ozon.ru/product/..." /></div>
       ${isEdit ? `
         <div class="field"><label>Остаток на складе</label><div style="font-size:14px">${product.stock} шт. (меняется через «Добавить/Удалить на складе»)</div></div>
         <div class="field">
@@ -1933,6 +1978,24 @@ function openProductModal(product) {
   }
 
   backdrop.querySelector('#pf-cancel').onclick = () => backdrop.remove();
+  const genDescBtn = backdrop.querySelector('#pf-gen-desc');
+  if (genDescBtn) {
+    genDescBtn.onclick = async () => {
+      genDescBtn.disabled = true;
+      genDescBtn.textContent = 'Генерирую…';
+      try {
+        const { description } = await api(`/api/catalog/${product.id}/generate-description`, { method: 'POST' });
+        backdrop.querySelector('#pf-description').value = description;
+        toast('Описание сгенерировано — проверьте и сохраните');
+      } catch (e) {
+        if (e.message === 'ai_not_configured') toast('ИИ сейчас не настроен');
+        else toast('Не удалось сгенерировать описание');
+      } finally {
+        genDescBtn.disabled = false;
+        genDescBtn.textContent = '✨ Сгенерировать через ИИ';
+      }
+    };
+  }
   backdrop.querySelector('#pf-save').onclick = async () => {
     const payload = {
       name: backdrop.querySelector('#pf-name').value.trim(),
@@ -1941,6 +2004,7 @@ function openProductModal(product) {
       brand: backdrop.querySelector('#pf-brand').value.trim(),
       description: backdrop.querySelector('#pf-description').value.trim(),
       price: Number(backdrop.querySelector('#pf-price').value),
+      ozon_url: backdrop.querySelector('#pf-ozon-url').value.trim(),
     };
     if (!payload.name || !payload.price) { toast('Заполните название и цену'); return; }
     try {
@@ -2338,6 +2402,7 @@ function attachEvents() {
       if (state.manageSection === 'stats') await loadStats();
       if (state.manageSection === 'botmsg') await loadBotMessages();
       if (state.manageSection === 'botlogs') await loadBotLogs();
+      if (state.manageSection === 'ozon') await loadOzonComparison();
       render();
     };
   });
@@ -2347,6 +2412,27 @@ function attachEvents() {
   app.querySelectorAll('[data-open-bot-chat]').forEach(row => {
     row.onclick = () => openBotChatModal(row.dataset.openBotChat);
   });
+  app.querySelectorAll('[data-ozon-check]').forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = 'Проверяю…';
+      try {
+        await api(`/api/ozon/check/${btn.dataset.ozonCheck}`, { method: 'POST' });
+        await loadOzonComparison();
+        render();
+        toast('Проверено');
+      } catch (e) { toast('Не удалось проверить'); btn.disabled = false; btn.textContent = 'Проверить'; }
+    };
+  });
+  const ozonCheckAllBtn = app.querySelector('[data-action="ozon-check-all"]');
+  if (ozonCheckAllBtn) {
+    ozonCheckAllBtn.onclick = async () => {
+      try {
+        const result = await api('/api/ozon/check-all', { method: 'POST' });
+        toast(`Запущена проверка ${result.count} товаров — займёт немного времени, обновите страницу через минуту-две`);
+      } catch (e) { toast('Не удалось запустить проверку'); }
+    };
+  }
   const backToManageMenu = app.querySelector('[data-action="back-to-manage-menu"]');
   if (backToManageMenu) backToManageMenu.onclick = () => { state.manageSection = null; render(); };
 
