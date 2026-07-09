@@ -97,14 +97,30 @@ async function notifyIdleNudge(telegramId) {
   await sendRaw(telegramId, db.getTemplate('idle_nudge'), keyboard());
 }
 
-// "Корзина собрана, но заказ не оформлен" — вызывается планировщиком
-async function notifyCartNudge(telegramId) {
-  await sendRaw(telegramId, db.getTemplate('cart_nudge'), keyboard());
+// "Корзина собрана, но заказ не оформлен" — вызывается планировщиком, с реальными товарами из корзины
+async function notifyCartNudge(telegramId, itemNames) {
+  const items = (itemNames && itemNames.length > 0) ? itemNames.join(', ') : 'ваши товары';
+  const text = db.renderTemplate('cart_nudge', { items });
+  await sendRaw(telegramId, text, keyboard());
 }
 
 // "Пообщались, а ты даже не открыл приложение" — вызывается планировщиком (через час после чата)
 async function notifyWebappNudge(telegramId) {
   await sendRaw(telegramId, db.getTemplate('webapp_nudge'), keyboard());
+}
+
+// "Скоро закончится — заказать снова?" — вызывается планировщиком
+async function notifyRestockReminder(telegramId, productName, productId, daysLeft) {
+  const text = db.renderTemplate('restock_reminder', { name: productName, days_left: daysLeft });
+  const url = WEBAPP_URL ? `${WEBAPP_URL}?reorder=${productId}` : null;
+  const replyMarkup = url ? { inline_keyboard: [[{ text: '🔄 Заказать снова', web_app: { url } }]] } : undefined;
+  await sendRaw(telegramId, text, replyMarkup);
+}
+
+// "Товар снова в наличии" — вызывается при пополнении склада, если кто-то ждал
+async function notifyBackInStock(telegramId, productName) {
+  const text = `📦 «${productName}» снова в наличии! Вы просили сообщить — успевайте заказать 🛒`;
+  await sendRaw(telegramId, text, keyboard());
 }
 
 // ---------- Живой ИИ-диалог прямо в чате бота ----------
@@ -205,5 +221,6 @@ function stopBot() { stopped = true; }
 module.exports = {
   startBot, stopBot,
   notifyOrderCompleted, notifyOrderPlaced, notifyAdminsNewOrder, notifyDosageAdvice,
-  sendReminder, notifyIdleNudge, notifyCartNudge, notifyWebappNudge
+  sendReminder, notifyIdleNudge, notifyCartNudge, notifyWebappNudge,
+  notifyRestockReminder, notifyBackInStock
 };

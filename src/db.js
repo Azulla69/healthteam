@@ -76,7 +76,8 @@ function seedProducts() {
     section: item.section, category: item.category, brand: item.brand,
     image_url: '', stock: item.stock, active: true, created_at: now,
     batches: item.stock > 0 ? [{ id: i + 1, qty: item.stock, expiry: null, created_at: now }] : [],
-    ozon_url: '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null
+    ozon_url: '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null,
+    package_size: null
   }));
 }
 
@@ -117,9 +118,9 @@ const DEFAULT_MESSAGE_TEMPLATES = {
   idle_nudge: `Эй, друг 👋 Ты заглянул в каталог, но ничего не выбрал.
 
 Давай я подскажу, что подойдёт именно тебе — просто напиши любое слово, и я задам пару вопросов 💬`,
-  cart_nudge: `Корзина уже собрана 🛒 Осталось только оформить заказ.
+  cart_nudge: `Корзина уже собрана 🛒 Там ждут: {items}
 
-Или тебе нужна ещё какая-то информация о товарах? Давай подскажу/помогу — просто напиши 💬`,
+Осталось только оформить заказ. Или тебе нужна ещё какая-то информация о товарах? Давай подскажу/помогу — просто напиши 💬`,
   webapp_nudge: `Мы в ответе за тех, кого приручили... 🦊
 
 Пообщались, а ты даже не открыл веб-приложение — ну разве так можно? Там весь каталог, твоя подборка и скидка ждут 👇`,
@@ -127,16 +128,19 @@ const DEFAULT_MESSAGE_TEMPLATES = {
   reminder_message: `⏰ Напоминание ({slot})
 
 Время принять:
-{items}`
+{items}`,
+  restock_reminder: `Похоже, {name} у тебя скоро закончится (осталось примерно {days_left} дн.) 📦
+
+Заказать ещё, чтобы не было перерыва в приёме?`
 };
 
 function loadDefault() {
   const products = seedProducts();
   return {
     users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [], consultant_sessions: [],
-    notifications: [], reviews: [], reminder_items: [], bot_chat_logs: [],
+    notifications: [], reviews: [], reminder_items: [], bot_chat_logs: [], stock_waitlist: [],
     message_templates: { ...DEFAULT_MESSAGE_TEMPLATES },
-    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1, reminder_items: 1, bot_chat_logs: 1 }
+    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1, reminder_items: 1, bot_chat_logs: 1, stock_waitlist: 1 }
   };
 }
 
@@ -149,7 +153,9 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.notifications) data.notifications = [];
   if (!data.reviews) data.reviews = [];
   if (!data.reminder_items) data.reminder_items = [];
+  data.reminder_items.forEach(i => { if (i.restock_notified === undefined) i.restock_notified = false; });
   if (!data.bot_chat_logs) data.bot_chat_logs = [];
+  if (!data.stock_waitlist) data.stock_waitlist = [];
   if (!data.message_templates) data.message_templates = { ...DEFAULT_MESSAGE_TEMPLATES };
   else Object.keys(DEFAULT_MESSAGE_TEMPLATES).forEach(k => { if (!(k in data.message_templates)) data.message_templates[k] = DEFAULT_MESSAGE_TEMPLATES[k]; });
   if (!data.seq.ledger) data.seq.ledger = 1;
@@ -160,12 +166,14 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.seq.reviews) data.seq.reviews = 1;
   if (!data.seq.reminder_items) data.seq.reminder_items = 1;
   if (!data.seq.bot_chat_logs) data.seq.bot_chat_logs = 1;
+  if (!data.seq.stock_waitlist) data.seq.stock_waitlist = 1;
   data.products.forEach(p => {
     if (p.ozon_url === undefined) p.ozon_url = '';
     if (p.ozon_price === undefined) p.ozon_price = null;
     if (p.ozon_checked_at === undefined) p.ozon_checked_at = null;
     if (p.ozon_check_status === undefined) p.ozon_check_status = 'never';
     if (p.ozon_check_error === undefined) p.ozon_check_error = null;
+    if (p.package_size === undefined) p.package_size = null;
   });
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
@@ -191,6 +199,7 @@ if (fs.existsSync(DB_FILE)) {
     if (u.last_idle_nudge_at === undefined) u.last_idle_nudge_at = null;
     if (u.last_cart_nudge_at === undefined) u.last_cart_nudge_at = null;
     if (u.last_webapp_nudge_at === undefined) u.last_webapp_nudge_at = null;
+    if (u.last_cart_items === undefined) u.last_cart_items = [];
     // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
     if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
       const now = new Date();
@@ -244,7 +253,7 @@ function upsertUser({ telegram_id, username, first_name, last_name, viaWebapp = 
       idle_check_due_at: null, idle_nudge_sent: true, cart_updated_at: null, cart_nudge_sent: true,
       webapp_opened_at: viaWebapp ? new Date().toISOString() : null,
       bot_chat_nudge_due_at: null, webapp_nudge_sent: true,
-      last_idle_nudge_at: null, last_cart_nudge_at: null, last_webapp_nudge_at: null,
+      last_idle_nudge_at: null, last_cart_nudge_at: null, last_webapp_nudge_at: null, last_cart_items: [],
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -347,7 +356,8 @@ function createProduct(fields) {
     price: Number(fields.price), section: fields.section || '', category: fields.category || '',
     brand: fields.brand || '', image_url: fields.image_url || '',
     stock: 0, batches: [], active: true, created_at: new Date().toISOString(),
-    ozon_url: fields.ozon_url || '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null
+    ozon_url: fields.ozon_url || '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null,
+    package_size: fields.package_size ? Number(fields.package_size) : null
   };
   data.products.push(product);
   persist();
@@ -366,7 +376,8 @@ function updateProduct(id, fields) {
     brand: fields.brand ?? product.brand,
     image_url: fields.image_url ?? product.image_url,
     active: fields.active != null ? !!fields.active : product.active,
-    ozon_url: fields.ozon_url ?? product.ozon_url
+    ozon_url: fields.ozon_url ?? product.ozon_url,
+    package_size: fields.package_size !== undefined ? (fields.package_size ? Number(fields.package_size) : null) : product.package_size
     // stock сюда намеренно не попадает — меняется только через addStock/removeStock
   });
   persist();
@@ -420,11 +431,30 @@ function addStock(productId, qty, expiry) {
   if (!product) return { error: 'not_found' };
   qty = Number(qty);
   if (!qty || qty <= 0) return { error: 'bad_qty' };
+  const wasOutOfStock = product.stock <= 0;
   if (!product.batches) product.batches = [];
   product.batches.push({ id: nextId('batches'), qty, expiry: expiry || null, created_at: new Date().toISOString() });
   product.stock += qty;
   persist();
-  return { product };
+  const notifyUsers = wasOutOfStock ? getAndClearWaitlist(productId) : [];
+  return { product, notifyUsers };
+}
+
+// ---------- Уведомление о поступлении товара ----------
+function addToWaitlist(user_id, product_id) {
+  const exists = data.stock_waitlist.some(w => w.user_id === user_id && w.product_id === Number(product_id));
+  if (exists) return { ok: true, already: true };
+  data.stock_waitlist.push({ id: nextId('stock_waitlist'), user_id, product_id: Number(product_id), created_at: new Date().toISOString() });
+  persist();
+  return { ok: true };
+}
+
+// Возвращает список пользователей, ждавших этот товар, и сразу очищает лист ожидания под него
+function getAndClearWaitlist(product_id) {
+  const waiting = data.stock_waitlist.filter(w => w.product_id === Number(product_id));
+  data.stock_waitlist = data.stock_waitlist.filter(w => w.product_id !== Number(product_id));
+  if (waiting.length > 0) persist();
+  return waiting.map(w => getUser(w.user_id)).filter(Boolean);
 }
 
 function removeStock(productId, qty) {
@@ -1067,7 +1097,10 @@ function getReviews({ page = 1, pageSize = 10 } = {}) {
 const REMINDER_SLOTS = ['morning', 'day', 'evening'];
 
 function getReminderData(user) {
-  return { settings: user.reminders, items: data.reminder_items.filter(i => i.user_id === user.id) };
+  const items = data.reminder_items
+    .filter(i => i.user_id === user.id)
+    .map(i => ({ ...i, progress: getCourseProgress(i) }));
+  return { settings: user.reminders, items };
 }
 
 function setReminderSlot(user_id, slot, { time, enabled }) {
@@ -1091,6 +1124,7 @@ function addReminderItem(user_id, { name, dosage_qty, dosage_unit, timing, food_
     source: source || 'manual',
     order_id: order_id || null,
     product_id: product_id || null,
+    restock_notified: false,
     created_at: new Date().toISOString()
   };
   data.reminder_items.push(item);
@@ -1120,6 +1154,42 @@ function findDueReminders(currentHHMM, todayStr) {
     });
   });
   return due;
+}
+
+const RESTOCK_WARN_DAYS = 4; // за сколько дней до конца пачки предупреждаем
+
+// Считает прогресс курса приёма для одной записи: сколько дней прошло / сколько всего хватит пачки.
+// Возвращает null, если не хватает данных (нет product_id или в товаре не указано "штук в упаковке").
+function getCourseProgress(item) {
+  if (!item.product_id) return null;
+  const product = getProduct(item.product_id);
+  if (!product || !product.package_size) return null;
+  const dailyQty = item.dosage_qty * item.timing.length;
+  if (dailyQty <= 0) return null;
+  const totalDays = Math.round(product.package_size / dailyQty);
+  const daysPassed = Math.floor((Date.now() - new Date(item.created_at).getTime()) / 86400000);
+  return { daysPassed: Math.min(daysPassed, totalDays), totalDays, daysLeft: totalDays - daysPassed };
+}
+
+// Находит записи, по которым пора напомнить "скоро закончится, докупить?"
+function findDueRestockReminders() {
+  const due = [];
+  data.reminder_items.forEach(item => {
+    if (item.restock_notified || item.source !== 'purchase' || !item.product_id) return;
+    const progress = getCourseProgress(item);
+    if (!progress) return;
+    if (progress.daysLeft <= RESTOCK_WARN_DAYS) {
+      const user = getUser(item.user_id);
+      const product = getProduct(item.product_id);
+      if (user && product) due.push({ user, item, product, daysLeft: progress.daysLeft });
+    }
+  });
+  return due;
+}
+
+function markRestockNotified(item_id) {
+  const item = data.reminder_items.find(i => i.id === Number(item_id));
+  if (item) { item.restock_notified = true; persist(); }
 }
 
 function markReminderSent(user_id, slot, todayStr) {
@@ -1165,11 +1235,12 @@ function pingAppOpen(user_id) {
   persist();
 }
 
-function touchCart(user_id) {
+function touchCart(user_id, itemNames) {
   const user = getUser(user_id);
   if (!user) return;
   const now = new Date();
   user.cart_updated_at = now.toISOString();
+  if (Array.isArray(itemNames) && itemNames.length > 0) user.last_cart_items = itemNames.slice(0, 10);
   const cooldownOk = !user.last_cart_nudge_at || (now - new Date(user.last_cart_nudge_at)) > 24 * 3600000;
   if (cooldownOk) user.cart_nudge_sent = false;
   // Раз человек что-то делает в приложении — не идле, не шлём "ты ничего не выбрал"
@@ -1278,6 +1349,8 @@ module.exports = {
   addNotification, getNotifications, getUnreadNotificationsCount, markAllNotificationsRead,
   submitReview, getReviews, deleteReview,
   getReminderData, setReminderSlot, addReminderItem, deleteReminderItem, findDueReminders, markReminderSent, REMINDER_SLOTS,
+  getCourseProgress, findDueRestockReminders, markRestockNotified,
+  addToWaitlist,
   getAllTemplates, getTemplate, setTemplate, resetTemplate, renderTemplate,
   pingAppOpen, touchCart, clearCartTracking, findDueIdleNudges, markIdleNudgeSent, findDueCartNudges, markCartNudgeSent,
   recordBotChat, findDueWebappNudges, markWebappNudgeSent,

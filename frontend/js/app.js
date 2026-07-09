@@ -45,7 +45,14 @@ const STATUS_LABELS = { processing: 'Принято в обработку', deli
 
 function effectiveAdmin() { return state.isAdmin && !state.viewAsClient; }
 function saveCart() { localStorage.setItem('cart', JSON.stringify(state.cart)); }
-function pingCartTouch() { if (state.user) api('/api/activity/cart-touch', { method: 'POST' }).catch(() => {}); }
+function pingCartTouch() {
+  if (!state.user) return;
+  const names = Object.keys(state.cart)
+    .map(id => state.products.find(p => p.id === Number(id)))
+    .filter(Boolean)
+    .map(p => p.name);
+  api('/api/activity/cart-touch', { method: 'POST', body: { items: names } }).catch(() => {});
+}
 function cartCount() { return Object.values(state.cart).reduce((a, b) => a + b, 0); }
 function toast(msg) {
   const el = document.createElement('div');
@@ -130,6 +137,20 @@ async function loadInitialData() {
     await loadReminders();
     state.view = 'reminders';
     render();
+  }
+
+  // Открыто по кнопке "Заказать снова" из напоминания "пора докупить": /?reorder=123
+  const reorderId = new URLSearchParams(window.location.search).get('reorder');
+  if (reorderId && state.user) {
+    const product = state.products.find(p => p.id === Number(reorderId));
+    if (product && product.stock > 0) {
+      state.cart[product.id] = Math.min((state.cart[product.id] || 0) + 1, product.stock);
+      saveCart();
+      pingCartTouch();
+      state.view = 'cart';
+      render();
+      toast(`«${product.name}» добавлен в корзину`);
+    }
   }
 }
 
@@ -472,6 +493,12 @@ function renderReminders() {
                 <div class="n">${i.name}</div>
                 <div class="m">${i.dosage_qty} ${i.dosage_unit}${i.food_relation ? ', ' + i.food_relation : ''}${i.source === 'purchase' ? ' · из заказа' : ''}</div>
                 <div class="reminder-timing-tags">${i.timing.map(t => `<span class="reminder-timing-tag">${TIMING_LABELS_UI[t]}</span>`).join('')}</div>
+                ${i.progress ? `
+                  <div style="margin-top:8px">
+                    <div style="font-size:11px;color:var(--ink-soft);margin-bottom:3px">День ${i.progress.daysPassed} из ${i.progress.totalDays}${i.progress.daysLeft <= 4 ? ' · скоро закончится' : ''}</div>
+                    <div class="bonus-progress-track" style="margin:0;background:var(--line)"><div class="bonus-progress-fill" style="width:${Math.min(100, Math.round(i.progress.daysPassed / i.progress.totalDays * 100))}%;background:var(--amber)"></div></div>
+                  </div>
+                ` : ''}
               </div>
               <button class="icon-btn" data-delete-reminder-item="${i.id}">🗑</button>
             </div>
@@ -667,6 +694,7 @@ function openProductDetailModal(product) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   let qty = 1;
+  let notifyRequested = false;
 
   function draw() {
     const maxReached = qty >= product.stock;
@@ -689,7 +717,9 @@ function openProductDetailModal(product) {
             <button id="pd-inc" ${maxReached ? 'disabled' : ''}>+</button>
           </div>
           <button class="btn btn-primary btn-block" id="pd-add">Добавить в корзину</button>
-        ` : ''}
+        ` : `
+          <button class="btn btn-amber btn-block" id="pd-notify-me" ${notifyRequested ? 'disabled' : ''}>${notifyRequested ? '🔔 Сообщим, когда появится' : '🔔 Уведомить о поступлении'}</button>
+        `}
         <button class="btn btn-ghost btn-block" id="pd-close" style="margin-top:8px">Закрыть</button>
       </div>
     `;
@@ -705,6 +735,19 @@ function openProductDetailModal(product) {
         toast('Добавлено в корзину');
         render();
       };
+    } else {
+      const notifyBtn = backdrop.querySelector('#pd-notify-me');
+      if (notifyBtn) {
+        notifyBtn.onclick = async () => {
+          if (!state.user) { toast('Откройте приложение в Telegram'); return; }
+          try {
+            await api(`/api/catalog/${product.id}/notify-me`, { method: 'POST' });
+            notifyRequested = true;
+            toast('Сообщим, как только появится в наличии');
+            draw();
+          } catch (e) { toast('Не удалось подписаться'); }
+        };
+      }
     }
   }
   draw();
@@ -1930,6 +1973,10 @@ function openProductModal(product) {
       </div>
       <div class="field"><label>Цена, ₽</label><input id="pf-price" type="number" value="${product?.price ?? ''}" /></div>
       <div class="field">
+        <label>Штук в упаковке (для напоминания «пора докупить»)</label>
+        <input id="pf-package-size" type="number" value="${product?.package_size ?? ''}" placeholder="напр. 60" />
+      </div>
+      <div class="field">
         <label>Ссылка на товар в Ozon (для авто-сверки цен)</label>
         <input id="pf-ozon-url" value="${product?.ozon_url || ''}" placeholder="https://www.ozon.ru/product/..." />
         ${isEdit ? `
@@ -2037,6 +2084,7 @@ function openProductModal(product) {
       description: backdrop.querySelector('#pf-description').value.trim(),
       price: Number(backdrop.querySelector('#pf-price').value),
       ozon_url: backdrop.querySelector('#pf-ozon-url').value.trim(),
+      package_size: backdrop.querySelector('#pf-package-size').value ? Number(backdrop.querySelector('#pf-package-size').value) : null,
     };
     if (!payload.name || !payload.price) { toast('Заполните название и цену'); return; }
     try {

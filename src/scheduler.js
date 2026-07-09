@@ -42,7 +42,7 @@ async function tick() {
   try {
     const cartUsers = db.findDueCartNudges();
     for (const user of cartUsers) {
-      await bot.notifyCartNudge(user.telegram_id);
+      await bot.notifyCartNudge(user.telegram_id, user.last_cart_items);
       db.markCartNudgeSent(user.id);
     }
   } catch (e) {
@@ -57,6 +57,16 @@ async function tick() {
     }
   } catch (e) {
     console.error('Ошибка планировщика "не открыл приложение":', e.message);
+  }
+
+  try {
+    const restockDue = db.findDueRestockReminders();
+    for (const { user, item, product, daysLeft } of restockDue) {
+      await bot.notifyRestockReminder(user.telegram_id, product.name, product.id, Math.max(0, daysLeft));
+      db.markRestockNotified(item.id);
+    }
+  } catch (e) {
+    console.error('Ошибка планировщика "пора докупить":', e.message);
   }
 
   // Не ждём — сверка может занять больше минуты, если товаров много, а планировщик не должен из-за этого тормозить

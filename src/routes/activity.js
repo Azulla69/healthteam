@@ -12,7 +12,7 @@ router.post('/ping', requireAuth, (req, res) => {
 
 // Вызывается при добавлении товара в корзину — если через 30 минут заказ не оформлен, придёт напоминание
 router.post('/cart-touch', requireAuth, (req, res) => {
-  db.touchCart(req.user.id);
+  db.touchCart(req.user.id, req.body.items);
   res.json({ ok: true });
 });
 

@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const db = require('../db');
-const { requireAdmin } = require('../middleware/auth');
+const { requireAdmin, requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -82,6 +82,13 @@ router.delete('/:id', requireAdmin, (req, res) => {
 });
 
 // ---------- Фото товара ----------
+router.post('/:id/notify-me', requireAuth, (req, res) => {
+  const product = db.getProduct(req.params.id);
+  if (!product) return res.status(404).json({ error: 'not_found' });
+  const result = db.addToWaitlist(req.user.id, req.params.id);
+  res.json(result);
+});
+
 router.post('/:id/image', requireAdmin, (req, res) => {
   upload.single('image')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message === 'not_an_image' ? 'not_an_image' : 'upload_failed' });
@@ -117,6 +124,10 @@ router.post('/:id/stock/add', requireAdmin, (req, res) => {
   if (!expiry) return res.status(400).json({ error: 'expiry_required' });
   const result = db.addStock(req.params.id, qty, expiry);
   if (result.error) return res.status(400).json({ error: result.error });
+  if (result.notifyUsers && result.notifyUsers.length > 0) {
+    const bot = require('../bot');
+    result.notifyUsers.forEach(u => bot.notifyBackInStock(u.telegram_id, result.product.name).catch(() => {}));
+  }
   res.json(db.sanitizeProduct(result.product, true));
 });
 
