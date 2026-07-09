@@ -23,7 +23,8 @@ function telegramAuth(req, res, next) {
       telegram_id: devId,
       username: 'dev_user',
       first_name: 'Dev',
-      last_name: 'User'
+      last_name: 'User',
+      viaWebapp: true
     });
     req.isAdmin = ADMIN_IDS.includes(devId);
     return next();
@@ -45,7 +46,8 @@ function telegramAuth(req, res, next) {
     telegram_id: String(tgUser.id),
     username: tgUser.username || null,
     first_name: tgUser.first_name || null,
-    last_name: tgUser.last_name || null
+    last_name: tgUser.last_name || null,
+    viaWebapp: true
   });
   req.isAdmin = ADMIN_IDS.includes(String(tgUser.id));
   next();

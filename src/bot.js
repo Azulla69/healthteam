@@ -17,6 +17,7 @@ function keyboard() {
 
 async function sendRaw(chatId, text, replyMarkup) {
   if (!BOT_TOKEN || BOT_TOKEN.includes('Example')) return; // бот не настроен — тихо выходим
+  db.logBotMessage(String(chatId), 'assistant', text);
   try {
     await fetch(`${API}/sendMessage`, {
       method: 'POST',
@@ -101,12 +102,27 @@ async function notifyCartNudge(telegramId) {
   await sendRaw(telegramId, db.getTemplate('cart_nudge'), keyboard());
 }
 
+// "Пообщались, а ты даже не открыл приложение" — вызывается планировщиком (через час после чата)
+async function notifyWebappNudge(telegramId) {
+  await sendRaw(telegramId, db.getTemplate('webapp_nudge'), keyboard());
+}
+
 // ---------- Живой ИИ-диалог прямо в чате бота ----------
 // История разговора храним в памяти процесса (сбрасывается при рестарте — это нормально для чата с рекомендациями)
 const conversations = new Map(); // chatId -> [{role, content}]
 const lastStartAt = new Map(); // chatId -> timestamp, защита от повторных /start подряд
 
-async function handleUserMessage(chatId, text) {
+async function handleUserMessage(chatId, text, from = {}) {
+  // Регистрируем пользователя в базе при ЛЮБОМ сообщении (даже если он никогда не открывал приложение) +
+  // ставим таймер напоминания "открой приложение", если он его ещё не открывал
+  db.recordBotChat({
+    telegram_id: String(chatId),
+    username: from.username || null,
+    first_name: from.first_name || null,
+    last_name: from.last_name || null
+  });
+  db.logBotMessage(String(chatId), 'user', text);
+
   try {
     if (text.startsWith('/start')) {
       const now = Date.now();
@@ -116,11 +132,8 @@ async function handleUserMessage(chatId, text) {
 
       conversations.delete(chatId);
       const payload = text.split(' ')[1];
-      if (payload === 'assistant') {
-        await sendRaw(chatId, db.getTemplate('assistant_intro'));
-      } else {
-        await sendRaw(chatId, db.getTemplate('welcome'), keyboard());
-      }
+      const reply = payload === 'assistant' ? db.getTemplate('assistant_intro') : db.getTemplate('welcome');
+      await sendRaw(chatId, reply, payload === 'assistant' ? undefined : keyboard());
       return;
     }
 
@@ -163,7 +176,7 @@ async function poll() {
       for (const update of data.result) {
         offset = update.update_id + 1;
         if (update.message && update.message.text) {
-          await handleUserMessage(update.message.chat.id, update.message.text);
+          await handleUserMessage(update.message.chat.id, update.message.text, update.message.from || {});
         }
       }
     }
@@ -190,5 +203,5 @@ function stopBot() { stopped = true; }
 module.exports = {
   startBot, stopBot,
   notifyOrderCompleted, notifyOrderPlaced, notifyAdminsNewOrder, notifyDosageAdvice,
-  sendReminder, notifyIdleNudge, notifyCartNudge
+  sendReminder, notifyIdleNudge, notifyCartNudge, notifyWebappNudge
 };

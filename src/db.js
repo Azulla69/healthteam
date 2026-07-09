@@ -119,6 +119,9 @@ const DEFAULT_MESSAGE_TEMPLATES = {
   cart_nudge: `Корзина уже собрана 🛒 Осталось только оформить заказ.
 
 Или тебе нужна ещё какая-то информация о товарах? Давай подскажу/помогу — просто напиши 💬`,
+  webapp_nudge: `Мы в ответе за тех, кого приручили... 🦊
+
+Пообщались, а ты даже не открыл веб-приложение — ну разве так можно? Там весь каталог, твоя подборка и скидка ждут 👇`,
   reminder_message: `⏰ Напоминание ({slot})
 
 Время принять:
@@ -129,9 +132,9 @@ function loadDefault() {
   const products = seedProducts();
   return {
     users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [], consultant_sessions: [],
-    notifications: [], reviews: [], reminder_items: [],
+    notifications: [], reviews: [], reminder_items: [], bot_chat_logs: [],
     message_templates: { ...DEFAULT_MESSAGE_TEMPLATES },
-    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1, reminder_items: 1 }
+    seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1, reminder_items: 1, bot_chat_logs: 1 }
   };
 }
 
@@ -144,6 +147,7 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.notifications) data.notifications = [];
   if (!data.reviews) data.reviews = [];
   if (!data.reminder_items) data.reminder_items = [];
+  if (!data.bot_chat_logs) data.bot_chat_logs = [];
   if (!data.message_templates) data.message_templates = { ...DEFAULT_MESSAGE_TEMPLATES };
   else Object.keys(DEFAULT_MESSAGE_TEMPLATES).forEach(k => { if (!(k in data.message_templates)) data.message_templates[k] = DEFAULT_MESSAGE_TEMPLATES[k]; });
   if (!data.seq.ledger) data.seq.ledger = 1;
@@ -153,6 +157,7 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.seq.notifications) data.seq.notifications = 1;
   if (!data.seq.reviews) data.seq.reviews = 1;
   if (!data.seq.reminder_items) data.seq.reminder_items = 1;
+  if (!data.seq.bot_chat_logs) data.seq.bot_chat_logs = 1;
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
     if (u.first_purchase_at === undefined) u.first_purchase_at = null;
@@ -171,6 +176,9 @@ if (fs.existsSync(DB_FILE)) {
     if (u.idle_nudge_sent === undefined) u.idle_nudge_sent = true;
     if (u.cart_updated_at === undefined) u.cart_updated_at = null;
     if (u.cart_nudge_sent === undefined) u.cart_nudge_sent = true;
+    if (u.webapp_opened_at === undefined) u.webapp_opened_at = u.created_at || new Date().toISOString();
+    if (u.bot_chat_nudge_due_at === undefined) u.bot_chat_nudge_due_at = null;
+    if (u.webapp_nudge_sent === undefined) u.webapp_nudge_sent = true;
     // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
     if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
       const now = new Date();
@@ -202,12 +210,13 @@ function persist() { fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2)); }
 function nextId(table) { return data.seq[table]++; }
 
 // ---------- Users ----------
-function upsertUser({ telegram_id, username, first_name, last_name }) {
+function upsertUser({ telegram_id, username, first_name, last_name, viaWebapp = false }) {
   let user = data.users.find(u => u.telegram_id === telegram_id);
   if (user) {
     user.username = username;
     if (!user.first_name) user.first_name = first_name;
     if (!user.last_name) user.last_name = last_name;
+    if (viaWebapp) markWebappOpened(user);
   } else {
     user = {
       id: nextId('users'), telegram_id, username, first_name, last_name,
@@ -221,6 +230,8 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
         evening: { time: '20:00', enabled: false, last_sent: null }
       },
       idle_check_due_at: null, idle_nudge_sent: true, cart_updated_at: null, cart_nudge_sent: true,
+      webapp_opened_at: viaWebapp ? new Date().toISOString() : null,
+      bot_chat_nudge_due_at: null, webapp_nudge_sent: true,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -228,6 +239,35 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
   }
   persist();
   return user;
+}
+
+// Отмечает, что пользователь открыл веб-приложение — отменяет напоминание "пообщались, а ты не открыл"
+function markWebappOpened(user) {
+  user.webapp_opened_at = new Date().toISOString();
+  user.bot_chat_nudge_due_at = null;
+  user.webapp_nudge_sent = true;
+}
+
+// Вызывается ботом при каждом сообщении пользователя — регистрирует его в базе (если это первое
+// обращение вообще, хоть через бот, хоть через приложение) и ставит таймер напоминания "открой приложение"
+function recordBotChat({ telegram_id, username, first_name, last_name }) {
+  const user = upsertUser({ telegram_id, username, first_name, last_name, viaWebapp: false });
+  if (!user.webapp_opened_at) {
+    user.bot_chat_nudge_due_at = new Date(Date.now() + 60 * 60000).toISOString();
+    user.webapp_nudge_sent = false;
+    persist();
+  }
+  return user;
+}
+
+function findDueWebappNudges(now = new Date()) {
+  return data.users.filter(u =>
+    !u.webapp_opened_at && u.bot_chat_nudge_due_at && !u.webapp_nudge_sent && new Date(u.bot_chat_nudge_due_at) <= now
+  );
+}
+function markWebappNudgeSent(user_id) {
+  const user = getUser(user_id);
+  if (user) { user.webapp_nudge_sent = true; persist(); }
 }
 
 // Привязывает пользователя к пригласившему (один раз, при первом визите по реф-ссылке)
@@ -1111,6 +1151,36 @@ function markCartNudgeSent(user_id) {
   if (user) { user.cart_nudge_sent = true; persist(); }
 }
 
+// ---------- Логи переписки с ботом ----------
+const MAX_BOT_CHAT_LOGS = 5000; // не даём файлу расти бесконечно
+
+function logBotMessage(telegram_id, role, text) {
+  const user = data.users.find(u => u.telegram_id === telegram_id);
+  data.bot_chat_logs.push({
+    id: nextId('bot_chat_logs'), telegram_id, user_id: user ? user.id : null,
+    role, text, created_at: new Date().toISOString()
+  });
+  if (data.bot_chat_logs.length > MAX_BOT_CHAT_LOGS) {
+    data.bot_chat_logs.splice(0, data.bot_chat_logs.length - MAX_BOT_CHAT_LOGS);
+  }
+  persist();
+}
+
+function getBotChatLogs({ page = 1, pageSize = 30 } = {}) {
+  const all = [...data.bot_chat_logs].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const total = all.length;
+  const start = (page - 1) * pageSize;
+  const items = all.slice(start, start + pageSize).map(l => {
+    const user = l.user_id ? getUser(l.user_id) : null;
+    return {
+      ...l,
+      user_name: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Без имени' : 'Неизвестный',
+      username: user ? user.username : null
+    };
+  });
+  return { items, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
 module.exports = {
   DATA_DIR,
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown, setReferrer,
@@ -1128,5 +1198,7 @@ module.exports = {
   submitReview, getReviews, deleteReview,
   getReminderData, setReminderSlot, addReminderItem, deleteReminderItem, findDueReminders, markReminderSent, REMINDER_SLOTS,
   getAllTemplates, getTemplate, setTemplate, resetTemplate, renderTemplate,
-  pingAppOpen, touchCart, clearCartTracking, findDueIdleNudges, markIdleNudgeSent, findDueCartNudges, markCartNudgeSent
+  pingAppOpen, touchCart, clearCartTracking, findDueIdleNudges, markIdleNudgeSent, findDueCartNudges, markCartNudgeSent,
+  recordBotChat, findDueWebappNudges, markWebappNudgeSent,
+  logBotMessage, getBotChatLogs
 };

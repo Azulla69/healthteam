@@ -48,6 +48,16 @@ async function tick() {
   } catch (e) {
     console.error('Ошибка планировщика "брошенная корзина":', e.message);
   }
+
+  try {
+    const webappUsers = db.findDueWebappNudges();
+    for (const user of webappUsers) {
+      await bot.notifyWebappNudge(user.telegram_id);
+      db.markWebappNudgeSent(user.id);
+    }
+  } catch (e) {
+    console.error('Ошибка планировщика "не открыл приложение":', e.message);
+  }
 }
 
 function startScheduler() {

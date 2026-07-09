@@ -37,6 +37,7 @@ const state = {
   ledgerData: { balance: 0, entries: [] },
   statsData: null,
   botMessagesData: [],
+  botLogsData: { items: [], total: 0, page: 1, totalPages: 1 },
 };
 
 const STATUS_LABELS = { processing: 'Принято в обработку', delivering: 'Доставляем', completed: 'Выполнено', cancelled: 'Отменён' };
@@ -1218,6 +1219,7 @@ const MANAGE_TILES = [
   { id: 'ledger', label: 'Бухгалтерия', emoji: '💰' },
   { id: 'stats', label: 'Статистика', emoji: '📊' },
   { id: 'botmsg', label: 'Бот', emoji: '🤖' },
+  { id: 'botlogs', label: 'Логи', emoji: '📜' },
 ];
 
 function renderManage() {
@@ -1245,6 +1247,7 @@ function renderManage() {
   else if (state.manageSection === 'ledger') inner = renderManageLedger();
   else if (state.manageSection === 'stats') inner = renderManageStats();
   else if (state.manageSection === 'botmsg') inner = renderManageBotMessages();
+  else if (state.manageSection === 'botlogs') inner = renderManageBotLogs();
 
   return `
     <div class="topbar"><div><div class="eyebrow">Управление</div><h1>${title}</h1></div></div>
@@ -1781,6 +1784,36 @@ function openBotMessageModal(key) {
   };
 }
 
+// ---- Управление: Логи переписки с ботом ----
+async function loadBotLogs(page = 1) {
+  state.botLogsData = await api(`/api/bot-logs?page=${page}`);
+}
+
+function renderManageBotLogs() {
+  const d = state.botLogsData;
+  return `
+    <p style="font-size:13px;color:var(--ink-soft);padding:0 16px 10px">Все сообщения между пользователями и ботом, от новых к старым.</p>
+    ${d.items.length === 0 ? `<div class="empty-state"><h3>Логов пока нет</h3></div>` :
+      d.items.map(l => `
+        <div class="list-item">
+          <div class="row-between">
+            <strong>${l.role === 'user' ? `${l.user_name}${l.username ? ' · @' + l.username : ''}` : '🤖 Бот'}</strong>
+            <span style="font-size:11px;color:var(--ink-soft)">${fmtDate(l.created_at)}</span>
+          </div>
+          <p style="font-size:13px;line-height:1.5;margin-top:6px;white-space:pre-wrap">${l.text}</p>
+        </div>
+      `).join('')
+    }
+    ${d.totalPages > 1 ? `
+      <div class="row-between" style="padding:0 16px;margin-top:12px">
+        <button class="btn btn-ghost" data-action="botlogs-prev" ${d.page <= 1 ? 'disabled' : ''}>← Назад</button>
+        <span style="font-size:13px;color:var(--ink-soft)">Стр. ${d.page} из ${d.totalPages}</span>
+        <button class="btn btn-ghost" data-action="botlogs-next" ${d.page >= d.totalPages ? 'disabled' : ''}>Вперёд →</button>
+      </div>
+    ` : ''}
+  `;
+}
+
 // ---- Модалка товара (создание/редактирование карточки) ----
 function openProductModal(product) {
   const isEdit = !!product;
@@ -2273,12 +2306,17 @@ function attachEvents() {
       if (state.manageSection === 'ledger') await loadLedger();
       if (state.manageSection === 'stats') await loadStats();
       if (state.manageSection === 'botmsg') await loadBotMessages();
+      if (state.manageSection === 'botlogs') await loadBotLogs(1);
       render();
     };
   });
   app.querySelectorAll('[data-open-botmsg]').forEach(row => {
     row.onclick = () => openBotMessageModal(row.dataset.openBotmsg);
   });
+  const botlogsPrevBtn = app.querySelector('[data-action="botlogs-prev"]');
+  if (botlogsPrevBtn) botlogsPrevBtn.onclick = async () => { await loadBotLogs(state.botLogsData.page - 1); render(); };
+  const botlogsNextBtn = app.querySelector('[data-action="botlogs-next"]');
+  if (botlogsNextBtn) botlogsNextBtn.onclick = async () => { await loadBotLogs(state.botLogsData.page + 1); render(); };
   const backToManageMenu = app.querySelector('[data-action="back-to-manage-menu"]');
   if (backToManageMenu) backToManageMenu.onclick = () => { state.manageSection = null; render(); };
 
