@@ -1,27 +1,9 @@
 const ai = require('./ai');
+const db = require('./db');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL;
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
-const WELCOME_TEXT = `Привет! 👋 Я бот-помощник магазина <b>HealthTeam</b> — БАДы, витамины и спортивное питание.
-
-Что у нас есть:
-🌿 <b>Каталог</b> — БАДы и спортпит с поиском, фильтром по производителю и сортировкой
-🎁 <b>Бонусная система</b> — кэшбек 3–10% с каждой покупки, действует 3 месяца
-🤝 <b>Реферальная система</b> — приглашайте друзей и получайте 5% с их покупок навсегда
-🎂 <b>Скидка на день рождения</b> — 15% на один заказ
-🚚 <b>Доставка</b> — от 0 до 300₽, от 1500₽ — бесплатно
-
-Жмите кнопку ниже, чтобы открыть магазин 👇
-
-А ещё можно просто написать мне прямо сюда, чем вы занимаетесь и какая у вас цель — я подберу подходящие БАДы и спортпит и всё подробно расскажу, не выходя из этого чата 💬`;
-
-const ASSISTANT_INTRO_TEXT = `Привет! Меня зовут Бот-помощник HealthTeam 🤖
-
-Готов выслушать все твои пожелания и подобрать то, что реально нужно — БАДы, витамины или спортпит под твои цели.
-
-Расскажи: чем занимаешься, какая цель (похудение, набор массы, энергия, форма), каким спортом занимаешься и какой у тебя рост и вес — и я всё подберу 💪`;
 
 function keyboard() {
   return {
@@ -48,7 +30,7 @@ async function sendRaw(chatId, text, replyMarkup) {
 
 // Отправляется автоматически, когда заказ переходит в статус "Выполнено"
 async function notifyOrderCompleted(telegramId, orderId) {
-  const text = `Заказ №${orderId} доставлен! 🎉\n\nСпасибо, что выбрали HealthTeam. Будем рады, если оцените заказ — это займёт минуту, а за отзыв начислим <b>50 бонусов</b> на ваш счёт.`;
+  const text = db.renderTemplate('order_review_request', { order_id: orderId });
   const reviewUrl = WEBAPP_URL ? `${WEBAPP_URL}?review=${orderId}` : null;
   const replyMarkup = reviewUrl
     ? { inline_keyboard: [[{ text: '⭐ Оценить заказ', web_app: { url: reviewUrl } }]] }
@@ -56,15 +38,25 @@ async function notifyOrderCompleted(telegramId, orderId) {
   await sendRaw(telegramId, text, replyMarkup);
 }
 
+// Отправляется сразу при оформлении заказа (не путать с уведомлением о доставке)
+async function notifyOrderPlaced(telegramId, orderId) {
+  const text = db.renderTemplate('order_placed_thankyou', { order_id: orderId });
+  await sendRaw(telegramId, text);
+}
+
 // Уведомляет всех админов (ADMIN_IDS) о новом заказе
 async function notifyAdminsNewOrder(order, buyer) {
   const adminIds = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (adminIds.length === 0) return;
   const itemsList = (order.items || []).map(i => `• ${i.name} × ${i.qty}`).join('\n');
-  const text = `🛒 <b>Новый заказ №${order.id}</b>\n\n` +
-    `${buyer.first_name || ''} ${buyer.last_name || ''} · @${buyer.username || '—'}\n` +
-    `Телефон: ${order.phone || '—'}\n\n${itemsList}\n\n` +
-    `Сумма: ${order.total} ₽`;
+  const text = db.renderTemplate('admin_new_order', {
+    order_id: order.id,
+    buyer_name: `${buyer.first_name || ''} ${buyer.last_name || ''}`.trim() || 'Без имени',
+    buyer_username: buyer.username || '—',
+    phone: order.phone || '—',
+    items: itemsList,
+    total: order.total
+  });
   const replyMarkup = WEBAPP_URL ? { inline_keyboard: [[{ text: '📋 Открыть управление', web_app: { url: WEBAPP_URL } }]] } : undefined;
   for (const adminId of adminIds) {
     await sendRaw(adminId, text, replyMarkup);
@@ -81,7 +73,9 @@ async function notifyDosageAdvice(telegramId, advice) {
     const food = a.food_relation ? `, ${a.food_relation}` : '';
     return `💊 <b>${a.name}</b>\n${a.dosage_qty} ${a.dosage_unit} — ${timing}${food}`;
   }).join('\n\n');
-  const text = `Как принимать то, что вы купили:\n\n${lines}\n\nМогу присылать напоминания в удобное время, чтобы вы точно не забыли 👇`;
+  const header = db.getTemplate('dosage_advice_header');
+  const footer = db.getTemplate('dosage_advice_footer');
+  const text = `${header}\n\n${lines}\n\n${footer}`;
   const url = WEBAPP_URL ? `${WEBAPP_URL}?reminders=1` : null;
   const replyMarkup = url ? { inline_keyboard: [[{ text: '🔔 Включить напоминания', web_app: { url } }]] } : undefined;
   await sendRaw(telegramId, text, replyMarkup);
@@ -93,23 +87,39 @@ async function sendReminder(telegramId, slotLabel, items) {
     const food = i.food_relation ? `, ${i.food_relation}` : '';
     return `💊 ${i.name} — ${i.dosage_qty} ${i.dosage_unit}${food}`;
   }).join('\n');
-  const text = `⏰ Напоминание (${slotLabel})\n\nВремя принять:\n${lines}`;
+  const text = db.renderTemplate('reminder_message', { slot: slotLabel, items: lines });
   await sendRaw(telegramId, text);
+}
+
+// "Ты посмотрел каталог, но ничего не выбрал" — вызывается планировщиком
+async function notifyIdleNudge(telegramId) {
+  await sendRaw(telegramId, db.getTemplate('idle_nudge'), keyboard());
+}
+
+// "Корзина собрана, но заказ не оформлен" — вызывается планировщиком
+async function notifyCartNudge(telegramId) {
+  await sendRaw(telegramId, db.getTemplate('cart_nudge'), keyboard());
 }
 
 // ---------- Живой ИИ-диалог прямо в чате бота ----------
 // История разговора храним в памяти процесса (сбрасывается при рестарте — это нормально для чата с рекомендациями)
 const conversations = new Map(); // chatId -> [{role, content}]
+const lastStartAt = new Map(); // chatId -> timestamp, защита от повторных /start подряд
 
 async function handleUserMessage(chatId, text) {
   try {
     if (text.startsWith('/start')) {
+      const now = Date.now();
+      const last = lastStartAt.get(chatId) || 0;
+      if (now - last < 3000) return; // защита от дублей — Telegram иногда доставляет апдейт повторно
+      lastStartAt.set(chatId, now);
+
       conversations.delete(chatId);
       const payload = text.split(' ')[1];
       if (payload === 'assistant') {
-        await sendRaw(chatId, ASSISTANT_INTRO_TEXT);
+        await sendRaw(chatId, db.getTemplate('assistant_intro'));
       } else {
-        await sendRaw(chatId, WELCOME_TEXT, keyboard());
+        await sendRaw(chatId, db.getTemplate('welcome'), keyboard());
       }
       return;
     }
@@ -177,4 +187,8 @@ function startBot() {
 
 function stopBot() { stopped = true; }
 
-module.exports = { startBot, stopBot, notifyOrderCompleted, notifyAdminsNewOrder, notifyDosageAdvice, sendReminder };
+module.exports = {
+  startBot, stopBot,
+  notifyOrderCompleted, notifyOrderPlaced, notifyAdminsNewOrder, notifyDosageAdvice,
+  sendReminder, notifyIdleNudge, notifyCartNudge
+};

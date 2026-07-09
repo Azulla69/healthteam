@@ -13,6 +13,8 @@ const statsRoutes = require('./routes/stats');
 const consultantRoutes = require('./routes/consultant');
 const reviewsRoutes = require('./routes/reviews');
 const remindersRoutes = require('./routes/reminders');
+const activityRoutes = require('./routes/activity');
+const botMessagesRoutes = require('./routes/bot-messages');
 
 const app = express();
 
@@ -29,6 +31,8 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/consultant', consultantRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/reminders', remindersRoutes);
+app.use('/api/activity', activityRoutes);
+app.use('/api/bot-messages', botMessagesRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
 app.use(express.static(path.join(__dirname, '..', 'frontend')));

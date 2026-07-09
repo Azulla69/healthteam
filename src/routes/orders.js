@@ -23,6 +23,8 @@ router.post('/', requireAuth, (req, res) => {
   });
   if (result.error) return errorResponse(res, result);
   require('../bot').notifyAdminsNewOrder(result.order, req.user).catch(() => {});
+  require('../bot').notifyOrderPlaced(req.user.telegram_id, result.order.id).catch(() => {});
+  db.clearCartTracking(req.user.id);
   res.status(201).json(result.order);
 });
 

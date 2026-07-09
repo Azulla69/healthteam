@@ -834,11 +834,12 @@ img.thumb { width: 44px; height: 44px; }
   margin-bottom: 10px;
 }
 .reminder-slot-card .row-between { margin-bottom: 8px; }
-.reminder-slot-card input[type="time"] {
+.reminder-slot-card select {
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
   font-size: 14px;
+  background: var(--surface);
 }
 .reminder-item-row {
   background: var(--surface);

@@ -79,11 +79,58 @@ function seedProducts() {
   }));
 }
 
+const DEFAULT_MESSAGE_TEMPLATES = {
+  welcome: `Привет! 👋 Я бот-помощник магазина <b>HealthTeam</b> — БАДы, витамины и спортивное питание.
+
+Что у нас есть:
+🌿 <b>Каталог</b> — БАДы и спортпит с поиском, фильтром по производителю и сортировкой
+🎁 <b>Бонусная система</b> — кэшбек 3–10% с каждой покупки, действует 3 месяца
+🤝 <b>Реферальная система</b> — приглашайте друзей и получайте 5% с их покупок навсегда
+🎂 <b>Скидка на день рождения</b> — 15% на один заказ
+🚚 <b>Доставка</b> — от 0 до 300₽, от 1500₽ — бесплатно
+
+Жмите кнопку ниже, чтобы открыть магазин 👇
+
+А ещё можно просто написать мне прямо сюда, чем вы занимаетесь и какая у вас цель — я подберу подходящие БАДы и спортпит и всё подробно расскажу, не выходя из этого чата 💬`,
+  assistant_intro: `Привет! Меня зовут Бот-помощник HealthTeam 🤖
+
+Готов выслушать все твои пожелания и подобрать то, что реально нужно — БАДы, витамины или спортпит под твои цели.
+
+Расскажи: чем занимаешься, какая цель (похудение, набор массы, энергия, форма), каким спортом занимаешься и какой у тебя рост и вес — и я всё подберу 💪`,
+  order_review_request: `Заказ №{order_id} доставлен! 🎉
+
+Спасибо, что выбрали HealthTeam. Будем рады, если оцените заказ — это займёт минуту, а за отзыв начислим <b>50 бонусов</b> на ваш счёт.`,
+  dosage_advice_header: 'Как принимать то, что вы купили:',
+  dosage_advice_footer: 'Могу присылать напоминания в удобное время, чтобы вы точно не забыли 👇',
+  admin_new_order: `🛒 <b>Новый заказ №{order_id}</b>
+
+{buyer_name} · @{buyer_username}
+Телефон: {phone}
+
+{items}
+
+Сумма: {total} ₽`,
+  order_placed_thankyou: `Спасибо за заказ №{order_id}! 🙏
+
+Наш менеджер скоро свяжется с вами для уточнения деталей доставки.`,
+  idle_nudge: `Эй, друг 👋 Ты заглянул в каталог, но ничего не выбрал.
+
+Давай я подскажу, что подойдёт именно тебе — просто напиши любое слово, и я задам пару вопросов 💬`,
+  cart_nudge: `Корзина уже собрана 🛒 Осталось только оформить заказ.
+
+Или тебе нужна ещё какая-то информация о товарах? Давай подскажу/помогу — просто напиши 💬`,
+  reminder_message: `⏰ Напоминание ({slot})
+
+Время принять:
+{items}`
+};
+
 function loadDefault() {
   const products = seedProducts();
   return {
     users: [], products, orders: [], order_items: [], ledger: [], bonus_tx: [], consultant_sessions: [],
     notifications: [], reviews: [], reminder_items: [],
+    message_templates: { ...DEFAULT_MESSAGE_TEMPLATES },
     seq: { users: 1, products: products.length + 1, orders: 1, order_items: 1, batches: products.length + 1, ledger: 1, bonus_tx: 1, consultant_sessions: 1, notifications: 1, reviews: 1, reminder_items: 1 }
   };
 }
@@ -97,6 +144,8 @@ if (fs.existsSync(DB_FILE)) {
   if (!data.notifications) data.notifications = [];
   if (!data.reviews) data.reviews = [];
   if (!data.reminder_items) data.reminder_items = [];
+  if (!data.message_templates) data.message_templates = { ...DEFAULT_MESSAGE_TEMPLATES };
+  else Object.keys(DEFAULT_MESSAGE_TEMPLATES).forEach(k => { if (!(k in data.message_templates)) data.message_templates[k] = DEFAULT_MESSAGE_TEMPLATES[k]; });
   if (!data.seq.ledger) data.seq.ledger = 1;
   if (!data.seq.batches) data.seq.batches = 1;
   if (!data.seq.bonus_tx) data.seq.bonus_tx = 1;
@@ -118,6 +167,10 @@ if (fs.existsSync(DB_FILE)) {
         evening: { time: '20:00', enabled: false, last_sent: null }
       };
     }
+    if (u.idle_check_due_at === undefined) u.idle_check_due_at = null;
+    if (u.idle_nudge_sent === undefined) u.idle_nudge_sent = true;
+    if (u.cart_updated_at === undefined) u.cart_updated_at = null;
+    if (u.cart_nudge_sent === undefined) u.cart_nudge_sent = true;
     // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
     if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
       const now = new Date();
@@ -167,6 +220,7 @@ function upsertUser({ telegram_id, username, first_name, last_name }) {
         day: { time: '14:00', enabled: false, last_sent: null },
         evening: { time: '20:00', enabled: false, last_sent: null }
       },
+      idle_check_due_at: null, idle_nudge_sent: true, cart_updated_at: null, cart_nudge_sent: true,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -985,6 +1039,78 @@ function markReminderSent(user_id, slot, todayStr) {
   if (user) { user.reminders[slot].last_sent = todayStr; persist(); }
 }
 
+// ---------- Редактируемые шаблоны сообщений бота ----------
+function getAllTemplates() { return data.message_templates; }
+function getTemplate(key) { return data.message_templates[key] ?? DEFAULT_MESSAGE_TEMPLATES[key] ?? ''; }
+function setTemplate(key, text) {
+  if (!(key in DEFAULT_MESSAGE_TEMPLATES)) return { error: 'unknown_key' };
+  data.message_templates[key] = text;
+  persist();
+  return { ok: true };
+}
+function resetTemplate(key) {
+  if (!(key in DEFAULT_MESSAGE_TEMPLATES)) return { error: 'unknown_key' };
+  data.message_templates[key] = DEFAULT_MESSAGE_TEMPLATES[key];
+  persist();
+  return { ok: true };
+}
+// Простая подстановка {переменных} в шаблон
+function renderTemplate(key, vars = {}) {
+  let text = getTemplate(key);
+  Object.entries(vars).forEach(([k, v]) => { text = text.split(`{${k}}`).join(v); });
+  return text;
+}
+
+// ---------- Отслеживание активности (для мягких напоминаний "не закончил выбор / бросил корзину") ----------
+const IDLE_NUDGE_MINUTES = 10;
+const CART_NUDGE_MINUTES = 30;
+
+function pingAppOpen(user_id) {
+  const user = getUser(user_id);
+  if (!user) return;
+  const due = new Date(Date.now() + IDLE_NUDGE_MINUTES * 60000).toISOString();
+  user.idle_check_due_at = due;
+  user.idle_nudge_sent = false;
+  persist();
+}
+
+function touchCart(user_id) {
+  const user = getUser(user_id);
+  if (!user) return;
+  user.cart_updated_at = new Date().toISOString();
+  user.cart_nudge_sent = false;
+  // Раз человек что-то делает в приложении — не идле, не шлём "ты ничего не выбрал"
+  user.idle_check_due_at = null;
+  persist();
+}
+
+function clearCartTracking(user_id) {
+  const user = getUser(user_id);
+  if (!user) return;
+  user.cart_updated_at = null;
+  user.cart_nudge_sent = true;
+  persist();
+}
+
+function findDueIdleNudges(now = new Date()) {
+  return data.users.filter(u => u.idle_check_due_at && !u.idle_nudge_sent && new Date(u.idle_check_due_at) <= now);
+}
+function markIdleNudgeSent(user_id) {
+  const user = getUser(user_id);
+  if (user) { user.idle_nudge_sent = true; persist(); }
+}
+
+function findDueCartNudges(now = new Date()) {
+  return data.users.filter(u =>
+    u.cart_updated_at && !u.cart_nudge_sent &&
+    (now - new Date(u.cart_updated_at)) >= CART_NUDGE_MINUTES * 60000
+  );
+}
+function markCartNudgeSent(user_id) {
+  const user = getUser(user_id);
+  if (user) { user.cart_nudge_sent = true; persist(); }
+}
+
 module.exports = {
   DATA_DIR,
   upsertUser, updateUser, getUser, getAllUsers, checkBirthDateCooldown, setReferrer,
@@ -1000,5 +1126,7 @@ module.exports = {
   createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE,
   addNotification, getNotifications, getUnreadNotificationsCount, markAllNotificationsRead,
   submitReview, getReviews, deleteReview,
-  getReminderData, setReminderSlot, addReminderItem, deleteReminderItem, findDueReminders, markReminderSent, REMINDER_SLOTS
+  getReminderData, setReminderSlot, addReminderItem, deleteReminderItem, findDueReminders, markReminderSent, REMINDER_SLOTS,
+  getAllTemplates, getTemplate, setTemplate, resetTemplate, renderTemplate,
+  pingAppOpen, touchCart, clearCartTracking, findDueIdleNudges, markIdleNudgeSent, findDueCartNudges, markCartNudgeSent
 };

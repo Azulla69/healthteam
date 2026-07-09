@@ -36,12 +36,14 @@ const state = {
   usersData: [],
   ledgerData: { balance: 0, entries: [] },
   statsData: null,
+  botMessagesData: [],
 };
 
 const STATUS_LABELS = { processing: 'Принято в обработку', delivering: 'Доставляем', completed: 'Выполнено', cancelled: 'Отменён' };
 
 function effectiveAdmin() { return state.isAdmin && !state.viewAsClient; }
 function saveCart() { localStorage.setItem('cart', JSON.stringify(state.cart)); }
+function pingCartTouch() { if (state.user) api('/api/activity/cart-touch', { method: 'POST' }).catch(() => {}); }
 function cartCount() { return Object.values(state.cart).reduce((a, b) => a + b, 0); }
 function toast(msg) {
   const el = document.createElement('div');
@@ -86,6 +88,7 @@ async function loadInitialData() {
       state.user = await api('/api/profile/me');
       state.isAdmin = !!state.user.isAdmin;
       await refreshMyActiveOrders();
+      api('/api/activity/ping', { method: 'POST' }).catch(() => {}); // не блокируем загрузку, если не удалось
 
       // Если открыто по реферальной ссылке (t.me/bot?startapp=ID) и ещё не привязан пригласивший
       const startParam = tg.initDataUnsafe && tg.initDataUnsafe.start_param;
@@ -437,15 +440,26 @@ function renderReminders() {
     <div class="section" style="padding-top:0">
       <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Бот сам напишет в Telegram в указанное время, что пора принять. Слот сработает, только если в нём есть хотя бы один препарат.</p>
 
-      ${['morning', 'day', 'evening'].map(slot => `
+      ${['morning', 'day', 'evening'].map(slot => {
+        const [h, m] = d.settings[slot].time.split(':');
+        return `
         <div class="reminder-slot-card">
           <div class="row-between">
             <strong>${SLOT_LABELS_UI[slot]}</strong>
             <input type="checkbox" data-slot-toggle="${slot}" ${d.settings[slot].enabled ? 'checked' : ''} />
           </div>
-          <input type="time" data-slot-time="${slot}" value="${d.settings[slot].time}" />
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <select data-slot-hour="${slot}">
+              ${Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(hh => `<option value="${hh}" ${hh === h ? 'selected' : ''}>${hh}</option>`).join('')}
+            </select>
+            <span>:</span>
+            <select data-slot-minute="${slot}">
+              ${Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0')).map(mm => `<option value="${mm}" ${mm === m ? 'selected' : ''}>${mm}</option>`).join('')}
+            </select>
+            <button class="btn btn-ghost" data-action="save-slot-time" data-slot="${slot}" style="padding:8px 14px;font-size:13px">Сохранить</button>
+          </div>
         </div>
-      `).join('')}
+      `;}).join('')}
 
       <div class="manage-group-title" style="padding-left:0">Что принимать</div>
       ${d.items.length === 0 ? `<div class="empty-state"><h3>Список пуст</h3><p>Появится автоматически после покупки, или добавьте вручную</p></div>` :
@@ -684,6 +698,7 @@ function openProductDetailModal(product) {
       backdrop.querySelector('#pd-add').onclick = () => {
         state.cart[product.id] = Math.min((state.cart[product.id] || 0) + qty, product.stock);
         saveCart();
+        pingCartTouch();
         backdrop.remove();
         toast('Добавлено в корзину');
         render();
@@ -1202,6 +1217,7 @@ const MANAGE_TILES = [
   { id: 'users', label: 'Пользователи', emoji: '👥' },
   { id: 'ledger', label: 'Бухгалтерия', emoji: '💰' },
   { id: 'stats', label: 'Статистика', emoji: '📊' },
+  { id: 'botmsg', label: 'Бот', emoji: '🤖' },
 ];
 
 function renderManage() {
@@ -1228,6 +1244,7 @@ function renderManage() {
   else if (state.manageSection === 'users') inner = renderManageUsers();
   else if (state.manageSection === 'ledger') inner = renderManageLedger();
   else if (state.manageSection === 'stats') inner = renderManageStats();
+  else if (state.manageSection === 'botmsg') inner = renderManageBotMessages();
 
   return `
     <div class="topbar"><div><div class="eyebrow">Управление</div><h1>${title}</h1></div></div>
@@ -1704,6 +1721,66 @@ function renderManageStats() {
   `;
 }
 
+// ---- Управление: Бот (редактируемые сообщения) ----
+async function loadBotMessages() {
+  state.botMessagesData = await api('/api/bot-messages');
+}
+
+function renderManageBotMessages() {
+  return `
+    <p style="font-size:13px;color:var(--ink-soft);padding:0 16px 10px">Все сообщения, которые бот отправляет автоматически. Можно отредактировать текст под себя.</p>
+    ${state.botMessagesData.map(t => `
+      <div class="manage-row" data-open-botmsg="${t.key}">
+        <div class="info">
+          <div class="n">${t.label}</div>
+          <div class="m">${t.hint}</div>
+        </div>
+        <button class="icon-btn">✏️</button>
+      </div>
+    `).join('')}
+  `;
+}
+
+function openBotMessageModal(key) {
+  const tpl = state.botMessagesData.find(t => t.key === key);
+  if (!tpl) return;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>${tpl.label}</h3>
+      <p style="font-size:12px;color:var(--ink-soft);margin-top:-6px">${tpl.hint}</p>
+      ${tpl.vars.length > 0 ? `<p style="font-size:12px;color:var(--ink-soft)">Доступные плейсхолдеры: ${tpl.vars.map(v => `<code>{${v}}</code>`).join(', ')}</p>` : ''}
+      <div class="field"><textarea id="botmsg-text" style="min-height:160px">${tpl.text}</textarea></div>
+      <button class="btn btn-primary btn-block" id="botmsg-save">Сохранить</button>
+      <button class="btn btn-ghost btn-block" id="botmsg-reset" style="margin-top:8px">Сбросить к тексту по умолчанию</button>
+      <button class="btn btn-ghost btn-block" id="botmsg-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('#botmsg-cancel').onclick = () => backdrop.remove();
+  backdrop.querySelector('#botmsg-save').onclick = async () => {
+    const text = document.getElementById('botmsg-text').value;
+    try {
+      await api(`/api/bot-messages/${key}`, { method: 'PUT', body: { text } });
+      backdrop.remove();
+      await loadBotMessages();
+      render();
+      toast('Сохранено');
+    } catch (e) { toast('Не удалось сохранить'); }
+  };
+  backdrop.querySelector('#botmsg-reset').onclick = async () => {
+    if (!confirm('Вернуть текст по умолчанию?')) return;
+    try {
+      await api(`/api/bot-messages/${key}/reset`, { method: 'POST' });
+      backdrop.remove();
+      await loadBotMessages();
+      render();
+      toast('Сброшено');
+    } catch (e) { toast('Не удалось сбросить'); }
+  };
+}
+
 // ---- Модалка товара (создание/редактирование карточки) ----
 function openProductModal(product) {
   const isEdit = !!product;
@@ -1912,9 +1989,20 @@ function attachEvents() {
   app.querySelectorAll('[data-service]').forEach(tile => {
     tile.onclick = async () => {
       if (tile.dataset.service === 'consultant') {
-        const link = `https://t.me/${state.botUsername}?start=assistant`;
-        if (tg && tg.openTelegramLink) tg.openTelegramLink(link);
-        else window.open(link, '_blank');
+        let botUsername = state.botUsername;
+        if (!botUsername) {
+          try { const cfg = await api('/api/config'); botUsername = cfg.botUsername; state.botUsername = botUsername; } catch (e) { /* ignore */ }
+        }
+        if (!botUsername) { toast('Не удалось определить бота — попробуйте позже'); return; }
+        const link = `https://t.me/${botUsername}?start=assistant`;
+        if (tg && tg.openTelegramLink) {
+          tg.openTelegramLink(link);
+          // На части клиентов Mini App не закрывается сама после openTelegramLink — закрываем явно,
+          // чтобы гарантированно оказаться в чате с ботом, а не остаться висеть в приложении
+          setTimeout(() => { if (tg.close) tg.close(); }, 300);
+        } else {
+          window.open(link, '_blank');
+        }
         return;
       }
       state.view = tile.dataset.service;
@@ -2024,7 +2112,7 @@ function attachEvents() {
       const current = state.cart[product.id] || 0;
       if (current >= product.stock) { toast('Достигнут максимум остатка'); return; }
       state.cart[product.id] = current + 1;
-      saveCart(); toast('Добавлено в корзину'); render();
+      saveCart(); pingCartTouch(); toast('Добавлено в корзину'); render();
     };
   });
 
@@ -2034,7 +2122,7 @@ function attachEvents() {
       const id = btn.dataset.id;
       const product = state.products.find(p => p.id === Number(id));
       if ((state.cart[id] || 0) >= product.stock) { toast('Достигнут максимум остатка'); return; }
-      state.cart[id] = (state.cart[id] || 0) + 1; saveCart(); render();
+      state.cart[id] = (state.cart[id] || 0) + 1; saveCart(); pingCartTouch(); render();
     };
   });
   app.querySelectorAll('[data-action="dec"]').forEach(btn => {
@@ -2129,13 +2217,16 @@ function attachEvents() {
       } catch (e) { toast('Не удалось обновить'); }
     };
   });
-  app.querySelectorAll('[data-slot-time]').forEach(input => {
-    input.onchange = async () => {
+  app.querySelectorAll('[data-action="save-slot-time"]').forEach(btn => {
+    btn.onclick = async () => {
+      const slot = btn.dataset.slot;
+      const hour = app.querySelector(`[data-slot-hour="${slot}"]`).value;
+      const minute = app.querySelector(`[data-slot-minute="${slot}"]`).value;
       try {
-        await api(`/api/reminders/slot/${input.dataset.slotTime}`, { method: 'PUT', body: { time: input.value } });
+        await api(`/api/reminders/slot/${slot}`, { method: 'PUT', body: { time: `${hour}:${minute}` } });
         await loadReminders();
         render();
-        toast('Время обновлено');
+        toast('Время сохранено');
       } catch (e) { toast('Не удалось обновить'); }
     };
   });
@@ -2181,8 +2272,12 @@ function attachEvents() {
       if (state.manageSection === 'users') await loadUsers();
       if (state.manageSection === 'ledger') await loadLedger();
       if (state.manageSection === 'stats') await loadStats();
+      if (state.manageSection === 'botmsg') await loadBotMessages();
       render();
     };
+  });
+  app.querySelectorAll('[data-open-botmsg]').forEach(row => {
+    row.onclick = () => openBotMessageModal(row.dataset.openBotmsg);
   });
   const backToManageMenu = app.querySelector('[data-action="back-to-manage-menu"]');
   if (backToManageMenu) backToManageMenu.onclick = () => { state.manageSection = null; render(); };

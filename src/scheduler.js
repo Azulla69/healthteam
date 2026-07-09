@@ -13,21 +13,40 @@ function moscowNow() {
 function pad(n) { return String(n).padStart(2, '0'); }
 
 async function tick() {
+  const bot = require('./bot'); // ленивый require, чтобы избежать циклической зависимости при старте
+
   try {
     const mskNow = moscowNow();
     const currentHHMM = `${pad(mskNow.getHours())}:${pad(mskNow.getMinutes())}`;
     const todayStr = `${mskNow.getFullYear()}-${pad(mskNow.getMonth() + 1)}-${pad(mskNow.getDate())}`;
 
     const due = db.findDueReminders(currentHHMM, todayStr);
-    if (due.length === 0) return;
-
-    const bot = require('./bot'); // ленивый require, чтобы избежать циклической зависимости при старте
     for (const { user, slot, items } of due) {
       await bot.sendReminder(user.telegram_id, SLOT_LABELS[slot], items);
       db.markReminderSent(user.id, slot, todayStr);
     }
   } catch (e) {
     console.error('Ошибка планировщика напоминаний:', e.message);
+  }
+
+  try {
+    const idleUsers = db.findDueIdleNudges();
+    for (const user of idleUsers) {
+      await bot.notifyIdleNudge(user.telegram_id);
+      db.markIdleNudgeSent(user.id);
+    }
+  } catch (e) {
+    console.error('Ошибка планировщика "бросил каталог":', e.message);
+  }
+
+  try {
+    const cartUsers = db.findDueCartNudges();
+    for (const user of cartUsers) {
+      await bot.notifyCartNudge(user.telegram_id);
+      db.markCartNudgeSent(user.id);
+    }
+  } catch (e) {
+    console.error('Ошибка планировщика "брошенная корзина":', e.message);
   }
 }
 
