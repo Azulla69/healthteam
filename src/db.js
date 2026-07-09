@@ -1166,19 +1166,46 @@ function logBotMessage(telegram_id, role, text) {
   persist();
 }
 
-function getBotChatLogs({ page = 1, pageSize = 30 } = {}) {
-  const all = [...data.bot_chat_logs].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  const total = all.length;
-  const start = (page - 1) * pageSize;
-  const items = all.slice(start, start + pageSize).map(l => {
-    const user = l.user_id ? getUser(l.user_id) : null;
-    return {
-      ...l,
-      user_name: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Без имени' : 'Неизвестный',
-      username: user ? user.username : null
-    };
+// Список собеседников бота — по одному на пользователя, с превью последнего сообщения
+function getBotChatUsers() {
+  const byTelegramId = new Map();
+  data.bot_chat_logs.forEach(l => {
+    const existing = byTelegramId.get(l.telegram_id);
+    if (!existing || new Date(l.created_at) >= new Date(existing.last_message_at)) {
+      byTelegramId.set(l.telegram_id, {
+        telegram_id: l.telegram_id, user_id: l.user_id,
+        last_message_at: l.created_at, last_message_text: l.text, last_message_role: l.role,
+        message_count: (existing?.message_count || 0) + 1
+      });
+    } else {
+      existing.message_count += 1;
+    }
   });
-  return { items, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
+  return [...byTelegramId.values()]
+    .map(u => {
+      const user = u.user_id ? getUser(u.user_id) : null;
+      return {
+        ...u,
+        user_name: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Без имени' : 'Неизвестный',
+        username: user ? user.username : null
+      };
+    })
+    .sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+}
+
+// Полная переписка с одним конкретным пользователем (от старых к новым — как обычный чат)
+function getBotChatLogsForUser(telegram_id, { page = 1, pageSize = 50 } = {}) {
+  const all = data.bot_chat_logs
+    .filter(l => l.telegram_id === String(telegram_id))
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const total = all.length;
+  // Пагинация "с конца" — последняя страница показывает самые свежие сообщения
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const clampedPage = Math.min(page, totalPages);
+  const start = Math.max(0, total - clampedPage * pageSize);
+  const end = total - (clampedPage - 1) * pageSize;
+  const items = all.slice(start, end);
+  return { items, total, page: clampedPage, pageSize, totalPages };
 }
 
 module.exports = {
@@ -1200,5 +1227,5 @@ module.exports = {
   getAllTemplates, getTemplate, setTemplate, resetTemplate, renderTemplate,
   pingAppOpen, touchCart, clearCartTracking, findDueIdleNudges, markIdleNudgeSent, findDueCartNudges, markCartNudgeSent,
   recordBotChat, findDueWebappNudges, markWebappNudgeSent,
-  logBotMessage, getBotChatLogs
+  logBotMessage, getBotChatUsers, getBotChatLogsForUser
 };

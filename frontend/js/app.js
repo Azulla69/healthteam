@@ -37,7 +37,7 @@ const state = {
   ledgerData: { balance: 0, entries: [] },
   statsData: null,
   botMessagesData: [],
-  botLogsData: { items: [], total: 0, page: 1, totalPages: 1 },
+  botLogsUsers: [],
 };
 
 const STATUS_LABELS = { processing: 'Принято в обработку', delivering: 'Доставляем', completed: 'Выполнено', cancelled: 'Отменён' };
@@ -1785,33 +1785,64 @@ function openBotMessageModal(key) {
 }
 
 // ---- Управление: Логи переписки с ботом ----
-async function loadBotLogs(page = 1) {
-  state.botLogsData = await api(`/api/bot-logs?page=${page}`);
+async function loadBotLogs() {
+  state.botLogsUsers = await api('/api/bot-logs');
 }
 
 function renderManageBotLogs() {
-  const d = state.botLogsData;
+  const users = state.botLogsUsers;
   return `
-    <p style="font-size:13px;color:var(--ink-soft);padding:0 16px 10px">Все сообщения между пользователями и ботом, от новых к старым.</p>
-    ${d.items.length === 0 ? `<div class="empty-state"><h3>Логов пока нет</h3></div>` :
-      d.items.map(l => `
-        <div class="list-item">
-          <div class="row-between">
-            <strong>${l.role === 'user' ? `${l.user_name}${l.username ? ' · @' + l.username : ''}` : '🤖 Бот'}</strong>
-            <span style="font-size:11px;color:var(--ink-soft)">${fmtDate(l.created_at)}</span>
+    <p style="font-size:13px;color:var(--ink-soft);padding:0 16px 10px">Кто писал боту — от последнего сообщения к самому старому. Нажмите, чтобы открыть всю переписку.</p>
+    ${users.length === 0 ? `<div class="empty-state"><h3>Логов пока нет</h3></div>` :
+      users.map(u => `
+        <div class="manage-row" data-open-bot-chat="${u.telegram_id}">
+          <div class="info">
+            <div class="n">${u.user_name}${u.username ? ' · @' + u.username : ''}</div>
+            <div class="m">${u.last_message_role === 'user' ? '' : '🤖 '}${(u.last_message_text || '').slice(0, 60)}${(u.last_message_text || '').length > 60 ? '…' : ''}</div>
           </div>
-          <p style="font-size:13px;line-height:1.5;margin-top:6px;white-space:pre-wrap">${l.text}</p>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--ink-soft)">${fmtDate(u.last_message_at)}</div>
+            <div style="font-size:11px;color:var(--ink-soft)">${u.message_count} сообщ.</div>
+          </div>
         </div>
       `).join('')
     }
-    ${d.totalPages > 1 ? `
-      <div class="row-between" style="padding:0 16px;margin-top:12px">
-        <button class="btn btn-ghost" data-action="botlogs-prev" ${d.page <= 1 ? 'disabled' : ''}>← Назад</button>
-        <span style="font-size:13px;color:var(--ink-soft)">Стр. ${d.page} из ${d.totalPages}</span>
-        <button class="btn btn-ghost" data-action="botlogs-next" ${d.page >= d.totalPages ? 'disabled' : ''}>Вперёд →</button>
-      </div>
-    ` : ''}
   `;
+}
+
+async function openBotChatModal(telegramId) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const user = state.botLogsUsers.find(u => u.telegram_id === telegramId);
+
+  async function draw(page) {
+    const d = await api(`/api/bot-logs/${telegramId}${page ? `?page=${page}` : ''}`);
+    backdrop.innerHTML = `
+      <div class="modal-sheet">
+        <h3>${user ? user.user_name + (user.username ? ' · @' + user.username : '') : 'Переписка'}</h3>
+        <div class="chat-messages" style="max-height:60vh">
+          ${d.items.map(l => `<div class="chat-bubble ${l.role === 'user' ? 'user' : 'assistant'}">${l.text}</div>`).join('')}
+        </div>
+        ${d.totalPages > 1 ? `
+          <div class="row-between" style="margin-top:10px">
+            <button class="btn btn-ghost" id="bc-older" ${d.page >= d.totalPages ? 'disabled' : ''}>← Более старые</button>
+            <span style="font-size:12px;color:var(--ink-soft)">Стр. ${d.page} из ${d.totalPages}</span>
+            <button class="btn btn-ghost" id="bc-newer" ${d.page <= 1 ? 'disabled' : ''}>Более новые →</button>
+          </div>
+        ` : ''}
+        <button class="btn btn-ghost btn-block" id="bc-close" style="margin-top:10px">Закрыть</button>
+      </div>
+    `;
+    backdrop.querySelector('#bc-close').onclick = () => backdrop.remove();
+    const olderBtn = backdrop.querySelector('#bc-older');
+    if (olderBtn) olderBtn.onclick = () => draw(d.page + 1);
+    const newerBtn = backdrop.querySelector('#bc-newer');
+    if (newerBtn) newerBtn.onclick = () => draw(d.page - 1);
+    const chatBox = backdrop.querySelector('.chat-messages');
+    if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+  }
+  document.body.appendChild(backdrop);
+  await draw(); // без номера страницы — бэкенд сам покажет последнюю (самые свежие сообщения)
 }
 
 // ---- Модалка товара (создание/редактирование карточки) ----
@@ -2306,17 +2337,16 @@ function attachEvents() {
       if (state.manageSection === 'ledger') await loadLedger();
       if (state.manageSection === 'stats') await loadStats();
       if (state.manageSection === 'botmsg') await loadBotMessages();
-      if (state.manageSection === 'botlogs') await loadBotLogs(1);
+      if (state.manageSection === 'botlogs') await loadBotLogs();
       render();
     };
   });
   app.querySelectorAll('[data-open-botmsg]').forEach(row => {
     row.onclick = () => openBotMessageModal(row.dataset.openBotmsg);
   });
-  const botlogsPrevBtn = app.querySelector('[data-action="botlogs-prev"]');
-  if (botlogsPrevBtn) botlogsPrevBtn.onclick = async () => { await loadBotLogs(state.botLogsData.page - 1); render(); };
-  const botlogsNextBtn = app.querySelector('[data-action="botlogs-next"]');
-  if (botlogsNextBtn) botlogsNextBtn.onclick = async () => { await loadBotLogs(state.botLogsData.page + 1); render(); };
+  app.querySelectorAll('[data-open-bot-chat]').forEach(row => {
+    row.onclick = () => openBotChatModal(row.dataset.openBotChat);
+  });
   const backToManageMenu = app.querySelector('[data-action="back-to-manage-menu"]');
   if (backToManageMenu) backToManageMenu.onclick = () => { state.manageSection = null; render(); };
 
