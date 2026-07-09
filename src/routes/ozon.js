@@ -1,12 +1,26 @@
 const express = require('express');
 const db = require('../db');
-const { fetchOzonPrice } = require('../ozon-scraper');
+const { fetchOzonPrice, searchOzonProduct } = require('../ozon-scraper');
 const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.get('/summary', requireAdmin, (req, res) => {
   res.json(db.getOzonComparison());
+});
+
+// Ищет товар на Ozon по названию — НЕ сохраняет автоматически, только возвращает найденное на подтверждение
+router.post('/search/:id', requireAdmin, async (req, res) => {
+  const product = db.getProduct(req.params.id);
+  if (!product) return res.status(404).json({ error: 'not_found' });
+  const query = [product.brand, product.name].filter(Boolean).join(' ');
+  try {
+    const result = await searchOzonProduct(query);
+    res.json(result);
+  } catch (e) {
+    console.error('Ошибка поиска на Ozon:', e.message);
+    res.status(404).json({ error: e.message });
+  }
 });
 
 async function checkOne(id) {

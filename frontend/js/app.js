@@ -1929,7 +1929,14 @@ function openProductModal(product) {
         ${isEdit ? `<button class="btn btn-ghost" id="pf-gen-desc" style="margin-top:6px;font-size:13px;padding:8px 14px">✨ Сгенерировать через ИИ</button>` : `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px">Сохраните товар, чтобы можно было сгенерировать описание через ИИ</div>`}
       </div>
       <div class="field"><label>Цена, ₽</label><input id="pf-price" type="number" value="${product?.price ?? ''}" /></div>
-      <div class="field"><label>Ссылка на товар в Ozon (для авто-сверки цен)</label><input id="pf-ozon-url" value="${product?.ozon_url || ''}" placeholder="https://www.ozon.ru/product/..." /></div>
+      <div class="field">
+        <label>Ссылка на товар в Ozon (для авто-сверки цен)</label>
+        <input id="pf-ozon-url" value="${product?.ozon_url || ''}" placeholder="https://www.ozon.ru/product/..." />
+        ${isEdit ? `
+          <button class="btn btn-ghost" id="pf-ozon-search" style="margin-top:6px;font-size:13px;padding:8px 14px">🔍 Найти автоматически</button>
+          <div id="pf-ozon-search-result" style="margin-top:6px"></div>
+        ` : `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px">Сохраните товар, чтобы можно было найти его на Ozon автоматически</div>`}
+      </div>
       ${isEdit ? `
         <div class="field"><label>Остаток на складе</label><div style="font-size:14px">${product.stock} шт. (меняется через «Добавить/Удалить на складе»)</div></div>
         <div class="field">
@@ -1993,6 +2000,31 @@ function openProductModal(product) {
       } finally {
         genDescBtn.disabled = false;
         genDescBtn.textContent = '✨ Сгенерировать через ИИ';
+      }
+    };
+  }
+  const ozonSearchBtn = backdrop.querySelector('#pf-ozon-search');
+  if (ozonSearchBtn) {
+    ozonSearchBtn.onclick = async () => {
+      ozonSearchBtn.disabled = true;
+      ozonSearchBtn.textContent = 'Ищу…';
+      const resultBox = backdrop.querySelector('#pf-ozon-search-result');
+      resultBox.innerHTML = '';
+      try {
+        const result = await api(`/api/ozon/search/${product.id}`, { method: 'POST' });
+        backdrop.querySelector('#pf-ozon-url').value = result.url;
+        const confidenceColor = result.confidence >= 60 ? '#1F7A45' : result.confidence >= 35 ? 'var(--amber-dark)' : 'var(--danger)';
+        resultBox.innerHTML = `
+          <div style="font-size:12px;padding:8px 10px;background:var(--sage);border-radius:8px">
+            Нашёл: <strong>${result.title}</strong>${result.price ? ` — ${result.price} ₽` : ''}<br>
+            <span style="color:${confidenceColor}">Похожесть: ${result.confidence}%</span> — проверьте, что это тот самый товар, прежде чем сохранять
+          </div>
+        `;
+      } catch (e) {
+        resultBox.innerHTML = `<div style="font-size:12px;color:var(--danger)">Не удалось найти: ${e.message}</div>`;
+      } finally {
+        ozonSearchBtn.disabled = false;
+        ozonSearchBtn.textContent = '🔍 Найти автоматически';
       }
     };
   }
