@@ -1,12 +1,22 @@
 const db = require('./db');
 
+// DeepSeek — основной провайдер (платный, но качественный и с высоким лимитом).
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
+
+// Groq остаётся бесплатным резервом на случай проблем с DeepSeek (баланс, сбой и т.п.).
 // Можно указать несколько ключей через запятую в GROQ_API_KEYS (разные аккаунты Groq —
 // лимит у Groq считается на аккаунт, поэтому несколько ключей одного аккаунта не помогут,
-// а вот ключи от разных аккаунтов — да). Для обратной совместимости читаем и старую GROQ_API_KEY.
+// а вот ключи от разных аккаунтов — да).
 const GROQ_API_KEYS = (process.env.GROQ_API_KEYS || process.env.GROQ_API_KEY || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-const GROQ_API_KEY = GROQ_API_KEYS[0]; // для обратной совместимости мест, где просто проверяется "ключ есть"
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_PRIMARY_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_FALLBACK_MODEL = 'llama-3.1-8b-instant';
+
+// Для обратной совместимости мест, где просто проверяется "есть ли вообще ИИ"
+const GROQ_API_KEY = GROQ_API_KEYS[0];
+const HAS_AI = !!(DEEPSEEK_API_KEY || GROQ_API_KEYS.length > 0);
 
 const CONSULTANT_MARKER_RE = /\[\[РЕКОМЕНДАЦИЯ:\s*([^\]]+)\]\]/i;
 
@@ -50,15 +60,14 @@ function buildSystemPrompt() {
 ${catalogText}`;
 }
 
-const PRIMARY_MODEL = 'llama-3.3-70b-versatile'; // качественная модель, но лимит по токенам скромнее
-const FALLBACK_MODEL = 'llama-3.1-8b-instant';    // подключается автоматически, если у основной кончился дневной лимит
+const PRIMARY_MODEL = GROQ_PRIMARY_MODEL; // оставлено для обратной совместимости экспорта
 
-async function callGroq(messages, model = PRIMARY_MODEL, apiKey = GROQ_API_KEY) {
-  const res = await fetch(GROQ_URL, {
+async function callProvider(messages, { url, key, model }) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
+      'Authorization': `Bearer ${key}`
     },
     body: JSON.stringify({
       model,
@@ -71,36 +80,52 @@ async function callGroq(messages, model = PRIMARY_MODEL, apiKey = GROQ_API_KEY) 
   try {
     data = await res.json();
   } catch (e) {
-    throw new Error(`groq_bad_response (status ${res.status}, не JSON)`);
+    throw new Error(`bad_response (status ${res.status}, не JSON)`);
   }
   if (!res.ok) {
-    console.error('Полный ответ Groq при ошибке:', JSON.stringify(data));
-    const err = new Error(`groq_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
+    console.error(`Полный ответ ${model} при ошибке:`, JSON.stringify(data));
+    const err = new Error(`provider_error (status ${res.status}): ${data.error?.message || JSON.stringify(data)}`);
     err.status = res.status;
     throw err;
   }
   if (!data.choices || !data.choices[0]) {
-    console.error('Неожиданный формат ответа Groq:', JSON.stringify(data));
-    throw new Error('groq_unexpected_format');
+    console.error('Неожиданный формат ответа:', JSON.stringify(data));
+    throw new Error('unexpected_format');
   }
   return sanitizeReply(data.choices[0].message.content);
 }
 
-// Пробуем все ключи на качественной модели по очереди; если ВСЕ упёрлись в лимит —
-// пробуем их же на резервной (более лёгкой) модели, у которой лимит обычно выше
+// Оставлено для обратной совместимости (используется напрямую нигде не должно, но пусть будет)
+async function callGroq(messages, model = GROQ_PRIMARY_MODEL, apiKey = GROQ_API_KEY) {
+  return callProvider(messages, { url: GROQ_URL, key: apiKey, model });
+}
+
+function buildAttempts() {
+  const attempts = [];
+  if (DEEPSEEK_API_KEY) attempts.push({ url: DEEPSEEK_URL, key: DEEPSEEK_API_KEY, model: 'deepseek-v4-flash', label: 'DeepSeek' });
+  GROQ_API_KEYS.forEach(key => attempts.push({ url: GROQ_URL, key, model: GROQ_PRIMARY_MODEL, label: `Groq 70B …${key.slice(-4)}` }));
+  GROQ_API_KEYS.forEach(key => attempts.push({ url: GROQ_URL, key, model: GROQ_FALLBACK_MODEL, label: `Groq 8B …${key.slice(-4)}` }));
+  return attempts;
+}
+
+// Пробуем провайдеров по очереди в порядке приоритета: DeepSeek → Groq (хорошая модель, все ключи) →
+// Groq (лёгкая модель, все ключи). Переходим к следующему только при ошибке лимита (429) —
+// любая другая ошибка означает реальную проблему, дальше пробовать бессмысленно.
 async function callGroqSmart(messages) {
-  const attempts = [
-    ...GROQ_API_KEYS.map(key => ({ key, model: PRIMARY_MODEL })),
-    ...GROQ_API_KEYS.map(key => ({ key, model: FALLBACK_MODEL }))
-  ];
+  const attempts = buildAttempts();
+  if (attempts.length === 0) {
+    const err = new Error('no_provider_configured');
+    err.status = 503;
+    throw err;
+  }
   let lastError;
-  for (const { key, model } of attempts) {
+  for (const attempt of attempts) {
     try {
-      return await callGroq(messages, model, key);
+      return await callProvider(messages, attempt);
     } catch (e) {
       lastError = e;
-      if (e.status !== 429) throw e; // не лимит — значит реальная ошибка, дальше пробовать бессмысленно
-      console.warn(`Лимит исчерпан (ключ …${key.slice(-4)}, модель ${model}) — пробую следующий вариант`);
+      if (e.status !== 429) throw e;
+      console.warn(`Лимит исчерпан (${attempt.label}) — пробую следующий вариант`);
     }
   }
   throw lastError;
@@ -173,4 +198,4 @@ ${list}
   }
 }
 
-module.exports = { GROQ_API_KEY, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, CONSULTANT_MARKER_RE };
+module.exports = { GROQ_API_KEY, HAS_AI, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, CONSULTANT_MARKER_RE };

@@ -6,7 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const router = express.Router();
 
 router.post('/chat', requireAuth, async (req, res) => {
-  if (!ai.GROQ_API_KEY) return res.status(503).json({ error: 'ai_not_configured' });
+  if (!ai.HAS_AI) return res.status(503).json({ error: 'ai_not_configured' });
   const { messages } = req.body;
   if (!Array.isArray(messages) || messages.length > 40) {
     return res.status(400).json({ error: 'bad_messages' });

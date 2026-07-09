@@ -78,7 +78,7 @@ router.put('/:id/complete', requireAuth, requireAdmin, (req, res) => {
 async function sendDosageAdviceAsync(order, buyer) {
   try {
     const ai = require('../ai');
-    if (!ai.GROQ_API_KEY) return;
+    if (!ai.HAS_AI) return;
     const advice = await ai.generateDosageAdvice(order.items);
     if (!advice || advice.length === 0) return;
     advice.forEach(a => {
