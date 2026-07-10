@@ -1,19 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
 
 :root {
-  --bg: #F2F5F4;
+  --bg: #F5F4F1;
   --surface: #FFFFFF;
-  --ink: #1B2226;
-  --ink-soft: #6C767B;
-  --forest: #20282C;
-  --forest-dark: #12171A;
-  --sage: #D8F0E8;
-  --amber: #13876C;
-  --amber-dark: #0B5F4B;
-  --line: #E2E7E5;
+  --ink: #262421;
+  --ink-soft: #726E67;
+  --forest: #3A3833;
+  --forest-dark: #1F1D1A;
+  --sage: #F6EACB;
+  --amber: #C9A227;
+  --amber-dark: #9C7B18;
+  --line: #E6E3DB;
   --danger: #B23B33;
   --radius: 14px;
-  --shadow: 0 2px 14px rgba(20, 30, 28, 0.07);
+  --shadow: 0 2px 14px rgba(38, 36, 33, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -22,13 +22,13 @@ html, body {
   margin: 0;
   padding: 0;
   background:
-    radial-gradient(circle at 8% 5%, rgba(19, 135, 108, 0.16), transparent 38%),
-    radial-gradient(circle at 95% 12%, rgba(32, 40, 44, 0.10), transparent 42%),
-    radial-gradient(circle at 25% 55%, rgba(216, 240, 232, 0.55), transparent 40%),
-    radial-gradient(circle at 85% 65%, rgba(19, 135, 108, 0.10), transparent 45%),
-    radial-gradient(circle at 50% 100%, rgba(32, 40, 44, 0.07), transparent 50%),
-    repeating-linear-gradient(90deg, rgba(32,40,44,0.035) 0px, rgba(32,40,44,0.035) 1px, transparent 1px, transparent 34px),
-    repeating-linear-gradient(0deg, rgba(32,40,44,0.035) 0px, rgba(32,40,44,0.035) 1px, transparent 1px, transparent 34px),
+    radial-gradient(circle at 8% 5%, rgba(201, 162, 39, 0.18), transparent 38%),
+    radial-gradient(circle at 95% 12%, rgba(58, 56, 51, 0.10), transparent 42%),
+    radial-gradient(circle at 25% 55%, rgba(246, 234, 203, 0.6), transparent 40%),
+    radial-gradient(circle at 85% 65%, rgba(201, 162, 39, 0.12), transparent 45%),
+    radial-gradient(circle at 50% 100%, rgba(58, 56, 51, 0.07), transparent 50%),
+    repeating-linear-gradient(90deg, rgba(58,56,51,0.035) 0px, rgba(58,56,51,0.035) 1px, transparent 1px, transparent 34px),
+    repeating-linear-gradient(0deg, rgba(58,56,51,0.035) 0px, rgba(58,56,51,0.035) 1px, transparent 1px, transparent 34px),
     var(--bg);
   background-attachment: fixed;
   color: var(--ink);
@@ -758,9 +758,9 @@ img.thumb { width: 44px; height: 44px; }
 /* ---- Плитки сервисов и яркие акценты ---- */
 .service-tile { background: linear-gradient(155deg, var(--surface), #F4FAF8); border: 1px solid var(--line); }
 .service-tile .emoji { font-size: 28px; }
-.bonus-card { box-shadow: 0 8px 24px rgba(19, 135, 108, 0.25); }
+.bonus-card { box-shadow: 0 8px 24px rgba(201, 162, 39, 0.30); }
 .btn-primary { box-shadow: 0 4px 14px rgba(18, 23, 26, 0.18); }
-.btn-amber { box-shadow: 0 4px 14px rgba(19, 135, 108, 0.30); }
+.btn-amber { box-shadow: 0 4px 14px rgba(201, 162, 39, 0.35); }
 .section-tile { box-shadow: 0 8px 22px rgba(18, 23, 26, 0.22); }
 
 /* ---- Центрированный заголовок (без хлебных крошек) ---- */

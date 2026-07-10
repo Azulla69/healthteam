@@ -2580,7 +2580,7 @@ function initParticles() {
       x: Math.random() * w, y: Math.random() * h,
       r: 1.5 + Math.random() * 2.5,
       vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25,
-      hue: Math.random() > 0.5 ? '19,135,108' : '32,40,44',
+      hue: Math.random() > 0.5 ? '201,162,39' : '58,56,51',
       alpha: 0.12 + Math.random() * 0.18
     }));
   }
