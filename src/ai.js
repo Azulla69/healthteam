@@ -220,4 +220,11 @@ async function generateProductDescription({ name, brand, section, category }) {
   return sanitizeReply(raw.trim());
 }
 
-module.exports = { GROQ_API_KEY, HAS_AI, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, generateProductDescription, CONSULTANT_MARKER_RE };
+// Общий чат-ассистент для админов — без сценария консультанта, просто помощник на любые вопросы
+async function askAdminAssistant(historyMessages) {
+  const systemPrompt = `Ты — полезный ассистент для администратора интернет-магазина HealthTeam (БАДы, витамины, спортивное питание). Отвечай на любые вопросы: по ведению бизнеса, текстам, аналитике, общие вопросы — что угодно. Общайся по-деловому, но дружелюбно, на "ты". Отвечай СТРОГО на русском языке, без иероглифов и других языков.`;
+  const raw = await callGroqSmart([{ role: 'system', content: systemPrompt }, ...historyMessages]);
+  return raw;
+}
+
+module.exports = { GROQ_API_KEY, HAS_AI, buildSystemPrompt, callGroq, askConsultant, generateDosageAdvice, generateProductDescription, askAdminAssistant, CONSULTANT_MARKER_RE };

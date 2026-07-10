@@ -39,6 +39,7 @@ const state = {
   botMessagesData: [],
   botLogsUsers: [],
   ozonData: [],
+  adminChat: { messages: [], loading: false, error: false },
 };
 
 const STATUS_LABELS = { processing: 'Принято в обработку', delivering: 'Доставляем', completed: 'Выполнено', cancelled: 'Отменён' };
@@ -1266,6 +1267,7 @@ const MANAGE_TILES = [
   { id: 'botmsg', label: 'Бот', emoji: '🤖' },
   { id: 'botlogs', label: 'Логи', emoji: '📜' },
   { id: 'ozon', label: 'Цены Ozon', emoji: '🛒' },
+  { id: 'deepseek', label: 'Дипсик', emoji: '🐳' },
 ];
 
 function renderManage() {
@@ -1295,6 +1297,7 @@ function renderManage() {
   else if (state.manageSection === 'botmsg') inner = renderManageBotMessages();
   else if (state.manageSection === 'botlogs') inner = renderManageBotLogs();
   else if (state.manageSection === 'ozon') inner = renderManageOzon();
+  else if (state.manageSection === 'deepseek') inner = renderManageDeepseek();
 
   return `
     <div class="topbar"><div><div class="eyebrow">Управление</div><h1>${title}</h1></div></div>
@@ -1940,6 +1943,40 @@ async function loadOzonComparison() {
 
 const OZON_STATUS_LABEL = { never: 'Ещё не проверялось', ok: 'Проверено', failed: 'Ошибка' };
 
+// ---- Управление: чат с Дипсиком (общий ассистент для админа) ----
+function renderManageDeepseek() {
+  const chat = state.adminChat;
+  return `
+    <div class="section" style="padding-top:0">
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:12px">Спросите что угодно — по бизнесу, текстам, аналитике или просто так.</p>
+      <div id="admin-chat-messages" class="chat-messages">
+        ${chat.messages.length === 0 ? `<div class="empty-state" style="padding:20px 0"><h3>Начните разговор</h3></div>` : ''}
+        ${chat.messages.map(m => `<div class="chat-bubble ${m.role}">${m.content}</div>`).join('')}
+        ${chat.loading ? `<div class="chat-bubble assistant chat-typing">Печатает…</div>` : ''}
+        ${chat.error ? `<div class="chat-bubble assistant" style="color:var(--danger)">Не удалось получить ответ. Попробуйте ещё раз.</div>` : ''}
+      </div>
+      <div class="field"><input id="admin-chat-input" placeholder="Напишите сообщение..." ${chat.loading ? 'disabled' : ''} /></div>
+      <button class="btn btn-primary btn-block" id="admin-chat-send" ${chat.loading ? 'disabled' : ''}>Отправить</button>
+    </div>
+  `;
+}
+
+async function sendAdminChatMessage() {
+  try {
+    const payload = state.adminChat.messages.map(m => ({ role: m.role, content: m.content }));
+    const data = await api('/api/admin-chat/chat', { method: 'POST', body: { messages: payload } });
+    state.adminChat.messages.push({ role: 'assistant', content: data.reply || '' });
+    state.adminChat.loading = false;
+    render();
+    document.getElementById('admin-chat-messages')?.scrollTo(0, 999999);
+  } catch (e) {
+    state.adminChat.loading = false;
+    state.adminChat.error = true;
+    if (e.message === 'ai_not_configured') toast('ИИ сейчас не настроен');
+    render();
+  }
+}
+
 function renderManageOzon() {
   const items = state.ozonData;
   return `
@@ -2560,6 +2597,7 @@ function attachEvents() {
       if (state.manageSection === 'botmsg') await loadBotMessages();
       if (state.manageSection === 'botlogs') await loadBotLogs();
       if (state.manageSection === 'ozon') await loadOzonComparison();
+      if (state.manageSection === 'deepseek') state.adminChat.error = false;
       render();
     };
   });
@@ -2590,6 +2628,25 @@ function attachEvents() {
       } catch (e) { toast('Не удалось запустить проверку'); }
     };
   }
+
+  // Чат с Дипсиком
+  const adminChatSendBtn = app.querySelector('#admin-chat-send');
+  const adminChatInput = app.querySelector('#admin-chat-input');
+  async function submitAdminChatInput() {
+    const text = adminChatInput.value.trim();
+    if (!text) return;
+    state.adminChat.messages.push({ role: 'user', content: text });
+    state.adminChat.loading = true;
+    state.adminChat.error = false;
+    render();
+    await sendAdminChatMessage();
+  }
+  if (adminChatSendBtn) adminChatSendBtn.onclick = submitAdminChatInput;
+  if (adminChatInput) {
+    adminChatInput.focus();
+    adminChatInput.onkeydown = (e) => { if (e.key === 'Enter') submitAdminChatInput(); };
+  }
+
   const backToManageMenu = app.querySelector('[data-action="back-to-manage-menu"]');
   if (backToManageMenu) backToManageMenu.onclick = () => { state.manageSection = null; render(); };
 

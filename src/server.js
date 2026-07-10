@@ -17,6 +17,7 @@ const activityRoutes = require('./routes/activity');
 const botMessagesRoutes = require('./routes/bot-messages');
 const botLogsRoutes = require('./routes/bot-logs');
 const ozonRoutes = require('./routes/ozon').router;
+const adminChatRoutes = require('./routes/admin-chat');
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use('/api/activity', activityRoutes);
 app.use('/api/bot-messages', botMessagesRoutes);
 app.use('/api/bot-logs', botLogsRoutes);
 app.use('/api/ozon', ozonRoutes);
+app.use('/api/admin-chat', adminChatRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
