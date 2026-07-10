@@ -2083,7 +2083,13 @@ function openProductModal(product) {
       <div class="field">
         <label>Описание</label>
         <textarea id="pf-description">${product?.description || ''}</textarea>
-        ${isEdit ? `<button class="btn btn-ghost" id="pf-gen-desc" style="margin-top:6px;font-size:13px;padding:8px 14px">✨ Сгенерировать через ИИ</button>` : `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px">Сохраните товар, чтобы можно было сгенерировать описание через ИИ</div>`}
+        ${isEdit ? `
+          <button class="btn btn-ghost" id="pf-gen-desc" style="margin-top:6px;font-size:13px;padding:8px 14px">✨ Сгенерировать через ИИ</button>
+          <div style="margin-top:8px">
+            <label style="font-size:12px;color:var(--ink-soft)">Уточнить промт (необязательно) — что поправить в описании этого товара</label>
+            <textarea id="pf-refinement" placeholder="напр. Сделай короче, сделай акцент на пользе для суставов" style="min-height:60px;margin-top:4px"></textarea>
+          </div>
+        ` : `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px">Сохраните товар, чтобы можно было сгенерировать описание через ИИ</div>`}
       </div>
       <div class="field"><label>Цена, ₽</label><input id="pf-price" type="number" value="${product?.price ?? ''}" /></div>
       <div class="field">
@@ -2152,9 +2158,13 @@ function openProductModal(product) {
       genDescBtn.disabled = true;
       genDescBtn.textContent = 'Генерирую…';
       try {
-        const { description } = await api(`/api/catalog/${product.id}/generate-description`, { method: 'POST' });
+        const previous_description = backdrop.querySelector('#pf-description').value.trim();
+        const refinement = backdrop.querySelector('#pf-refinement').value.trim();
+        const { description } = await api(`/api/catalog/${product.id}/generate-description`, {
+          method: 'POST', body: { previous_description, refinement }
+        });
         backdrop.querySelector('#pf-description').value = description;
-        toast('Описание сгенерировано — проверьте и сохраните');
+        toast(refinement ? 'Описание доработано с учётом пожелания' : 'Описание сгенерировано — проверьте и сохраните');
       } catch (e) {
         if (e.message === 'ai_not_configured') toast('ИИ сейчас не настроен');
         else toast('Не удалось сгенерировать описание');

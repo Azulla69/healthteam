@@ -60,9 +60,11 @@ router.post('/:id/generate-description', requireAdmin, async (req, res) => {
   if (!product) return res.status(404).json({ error: 'not_found' });
   const ai = require('../ai');
   if (!ai.HAS_AI) return res.status(503).json({ error: 'ai_not_configured' });
+  const { previous_description, refinement } = req.body;
   try {
     const description = await ai.generateProductDescription({
-      name: product.name, brand: product.brand, section: product.section, category: product.category
+      name: product.name, brand: product.brand, section: product.section, category: product.category,
+      previousDescription: previous_description, refinement
     });
     res.json({ description });
   } catch (e) {

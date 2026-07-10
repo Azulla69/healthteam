@@ -201,8 +201,18 @@ ${list}
 }
 
 // Генерирует подробное продающее описание товара по названию/бренду/категории
-async function generateProductDescription({ name, brand, section, category }) {
-  const prompt = `Ты — копирайтер интернет-магазина БАДов и спортивного питания HealthTeam. Напиши подробное описание товара для карточки в каталоге.
+async function generateProductDescription({ name, brand, section, category, previousDescription, refinement }) {
+  let prompt;
+  if (refinement && previousDescription) {
+    prompt = `Ты — копирайтер интернет-магазина БАДов и спортивного питания HealthTeam. Ты уже писал описание для товара "${name}" (${brand || 'бренд не указан'}, ${section || ''} / ${category || ''}), вот текущий вариант:
+
+«${previousDescription}»
+
+Администратор магазина просит доработать его: «${refinement}»
+
+Перепиши описание с учётом этого пожелания. Требования остаются те же: 3-5 предложений, живо и по-человечески, без канцелярита, без markdown-разметки. Ответь ТОЛЬКО текстом нового описания, без вступлений.`;
+  } else {
+    prompt = `Ты — копирайтер интернет-магазина БАДов и спортивного питания HealthTeam. Напиши подробное описание товара для карточки в каталоге.
 
 Товар: ${name}
 Производитель: ${brand || 'не указан'}
@@ -215,6 +225,7 @@ async function generateProductDescription({ name, brand, section, category }) {
 - Пиши живо и по-человечески, без канцелярита и без "воды"
 - Не используй markdown-разметку, только обычный текст
 - Ответь ТОЛЬКО текстом описания, без вступлений вроде "Вот описание:"`;
+  }
 
   const raw = await callGroqSmart([{ role: 'user', content: prompt }]);
   return sanitizeReply(raw.trim());
