@@ -16,7 +16,7 @@ const remindersRoutes = require('./routes/reminders');
 const activityRoutes = require('./routes/activity');
 const botMessagesRoutes = require('./routes/bot-messages');
 const botLogsRoutes = require('./routes/bot-logs');
-const ozonRoutes = require('./routes/ozon').router;
+// const ozonRoutes = require('./routes/ozon').router; // временно отключено — вернёмся позже
 const adminChatRoutes = require('./routes/admin-chat');
 
 const app = express();
@@ -37,7 +37,7 @@ app.use('/api/reminders', remindersRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/bot-messages', botMessagesRoutes);
 app.use('/api/bot-logs', botLogsRoutes);
-app.use('/api/ozon', ozonRoutes);
+// app.use('/api/ozon', ozonRoutes); // временно отключено — вернёмся позже
 app.use('/api/admin-chat', adminChatRoutes);
 
 // Отдаём фронтенд как статику (удобно для деплоя одним куском на Railway/Render)
