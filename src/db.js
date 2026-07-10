@@ -77,7 +77,7 @@ function seedProducts() {
     image_url: '', stock: item.stock, active: true, created_at: now,
     batches: item.stock > 0 ? [{ id: i + 1, qty: item.stock, expiry: null, created_at: now }] : [],
     ozon_url: '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null,
-    package_size: null, dosage_instructions: ''
+    package_size: null, dosage_instructions: '', composition: '', allergens: '', contraindications: ''
   }));
 }
 
@@ -175,6 +175,9 @@ if (fs.existsSync(DB_FILE)) {
     if (p.ozon_check_error === undefined) p.ozon_check_error = null;
     if (p.package_size === undefined) p.package_size = null;
     if (p.dosage_instructions === undefined) p.dosage_instructions = '';
+    if (p.composition === undefined) p.composition = '';
+    if (p.allergens === undefined) p.allergens = '';
+    if (p.contraindications === undefined) p.contraindications = '';
   });
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
@@ -361,7 +364,8 @@ function createProduct(fields) {
     stock: 0, batches: [], active: true, created_at: new Date().toISOString(),
     ozon_url: fields.ozon_url || '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null,
     package_size: fields.package_size ? Number(fields.package_size) : null,
-    dosage_instructions: fields.dosage_instructions || ''
+    dosage_instructions: fields.dosage_instructions || '',
+    composition: fields.composition || '', allergens: fields.allergens || '', contraindications: fields.contraindications || ''
   };
   data.products.push(product);
   persist();
@@ -382,7 +386,10 @@ function updateProduct(id, fields) {
     active: fields.active != null ? !!fields.active : product.active,
     ozon_url: fields.ozon_url ?? product.ozon_url,
     package_size: fields.package_size !== undefined ? (fields.package_size ? Number(fields.package_size) : null) : product.package_size,
-    dosage_instructions: fields.dosage_instructions !== undefined ? fields.dosage_instructions : product.dosage_instructions
+    dosage_instructions: fields.dosage_instructions !== undefined ? fields.dosage_instructions : product.dosage_instructions,
+    composition: fields.composition !== undefined ? fields.composition : product.composition,
+    allergens: fields.allergens !== undefined ? fields.allergens : product.allergens,
+    contraindications: fields.contraindications !== undefined ? fields.contraindications : product.contraindications
     // stock сюда намеренно не попадает — меняется только через addStock/removeStock
   });
   persist();

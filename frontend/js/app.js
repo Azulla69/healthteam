@@ -2073,13 +2073,27 @@ function openProductModal(product) {
         ` : `<div style="font-size:11px;color:var(--ink-soft);margin-top:4px">Сохраните товар, чтобы можно было сгенерировать описание через ИИ</div>`}
       </div>
       <div class="field"><label>Цена, ₽</label><input id="pf-price" type="number" value="${product?.price ?? ''}" /></div>
+
+      <div class="manage-group-title" style="padding-left:0;margin-top:16px">Приём и безопасность (заполняется вручную с упаковки — точность здесь важна)</div>
       <div class="field">
         <label>Штук в упаковке (для напоминания «пора докупить»)</label>
         <input id="pf-package-size" type="number" value="${product?.package_size ?? ''}" placeholder="напр. 60" />
       </div>
       <div class="field">
-        <label>Инструкция по применению (с упаковки — ИИ будет опираться именно на неё)</label>
+        <label>Инструкция по применению (ИИ будет опираться именно на неё)</label>
         <textarea id="pf-dosage-instructions" placeholder="напр. По 1 капсуле в день, вечером, после еды">${product?.dosage_instructions || ''}</textarea>
+      </div>
+      <div class="field">
+        <label>Состав</label>
+        <textarea id="pf-composition" placeholder="напр. Магния бисглицинат 200мг, желатиновая капсула, антислёживающий агент...">${product?.composition || ''}</textarea>
+      </div>
+      <div class="field">
+        <label>Аллергены (через запятую) — ИИ не будет советовать этот товар, если покупатель на них указал</label>
+        <input id="pf-allergens" value="${product?.allergens || ''}" placeholder="напр. соя, глютен, лактоза" />
+      </div>
+      <div class="field">
+        <label>Противопоказания — покажется покупателю вместе с инструкцией по приёму</label>
+        <textarea id="pf-contraindications" placeholder="напр. Не рекомендуется при беременности, детям до 18 лет">${product?.contraindications || ''}</textarea>
       </div>
       ${isEdit ? `
         <div class="field"><label>Остаток на складе</label><div style="font-size:14px">${product.stock} шт. (меняется через «Добавить/Удалить на складе»)</div></div>
@@ -2161,6 +2175,9 @@ function openProductModal(product) {
       price: Number(backdrop.querySelector('#pf-price').value),
       package_size: backdrop.querySelector('#pf-package-size').value ? Number(backdrop.querySelector('#pf-package-size').value) : null,
       dosage_instructions: backdrop.querySelector('#pf-dosage-instructions').value.trim(),
+      composition: backdrop.querySelector('#pf-composition').value.trim(),
+      allergens: backdrop.querySelector('#pf-allergens').value.trim(),
+      contraindications: backdrop.querySelector('#pf-contraindications').value.trim(),
     };
     if (!payload.name || !payload.price) { toast('Заполните название и цену'); return; }
     try {

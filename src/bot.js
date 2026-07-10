@@ -72,7 +72,8 @@ async function notifyDosageAdvice(telegramId, advice) {
   const lines = advice.map(a => {
     const timing = a.timing.map(t => TIMING_LABELS[t] || t).join(', ');
     const food = a.food_relation ? `, ${a.food_relation}` : '';
-    return `💊 <b>${a.name}</b>\n${a.dosage_qty} ${a.dosage_unit} — ${timing}${food}`;
+    const warning = a.contraindications ? `\n⚠️ Противопоказания: ${a.contraindications}` : '';
+    return `💊 <b>${a.name}</b>\n${a.dosage_qty} ${a.dosage_unit} — ${timing}${food}${warning}`;
   }).join('\n\n');
   const header = db.getTemplate('dosage_advice_header');
   const footer = db.getTemplate('dosage_advice_footer');
