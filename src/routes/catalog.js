@@ -71,6 +71,42 @@ router.post('/:id/generate-description', requireAdmin, async (req, res) => {
   }
 });
 
+// Находит все товары с пустым описанием и генерирует для них текст — НЕ сохраняет,
+// только возвращает на предпросмотр администратору
+router.post('/ai-fill-preview', requireAdmin, async (req, res) => {
+  const ai = require('../ai');
+  if (!ai.HAS_AI) return res.status(503).json({ error: 'ai_not_configured' });
+  const empty = db.getProducts({}).filter(p => !p.description || !p.description.trim());
+  if (empty.length === 0) return res.json({ changes: [] });
+  const changes = [];
+  for (const product of empty) {
+    try {
+      const description = await ai.generateProductDescription({
+        name: product.name, brand: product.brand, section: product.section, category: product.category
+      });
+      changes.push({ id: product.id, name: product.name, old_description: product.description || '', new_description: description });
+    } catch (e) {
+      console.error(`Ошибка генерации описания для товара #${product.id}:`, e.message);
+      changes.push({ id: product.id, name: product.name, old_description: product.description || '', new_description: null, error: e.message });
+    }
+  }
+  res.json({ changes });
+});
+
+// Применяет подтверждённые администратором описания (после ручной проверки на фронте)
+router.post('/ai-fill-apply', requireAdmin, (req, res) => {
+  const { changes } = req.body;
+  if (!Array.isArray(changes)) return res.status(400).json({ error: 'changes_required' });
+  let applied = 0;
+  changes.forEach(c => {
+    if (c.id && typeof c.new_description === 'string' && c.new_description.trim()) {
+      db.updateProduct(c.id, { description: c.new_description });
+      applied++;
+    }
+  });
+  res.json({ applied });
+});
+
 router.delete('/:id', requireAdmin, (req, res) => {
   if (req.query.hard === 'true') {
     db.deleteProductHard(req.params.id);

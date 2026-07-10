@@ -1331,6 +1331,7 @@ function renderManageCatalog() {
       <button class="manage-action-btn" data-action="mc-add-stock"><span class="emoji">📥</span> Добавить товар на склад</button>
       <button class="manage-action-btn" data-action="mc-remove-stock"><span class="emoji">📤</span> Удалить товар со склада</button>
       <button class="manage-action-btn" data-action="mc-list"><span class="emoji">📋</span> Список товаров</button>
+      <button class="manage-action-btn" data-action="mc-ai-fill"><span class="emoji">✨</span> Заполнить всё пустое через ИИ</button>
     </div>
   `;
 }
@@ -1789,6 +1790,81 @@ function renderManageBotMessages() {
       </div>
     `).join('')}
   `;
+}
+
+async function openAiFillModal() {
+  const loadingBackdrop = document.createElement('div');
+  loadingBackdrop.className = 'modal-backdrop';
+  loadingBackdrop.innerHTML = `<div class="modal-sheet"><h3>Генерирую описания…</h3><p style="font-size:13px;color:var(--ink-soft)">Это может занять минуту-другую, если пустых товаров много. Не закрывайте окно.</p></div>`;
+  document.body.appendChild(loadingBackdrop);
+
+  let data;
+  try {
+    data = await api('/api/catalog/ai-fill-preview', { method: 'POST' });
+  } catch (e) {
+    loadingBackdrop.remove();
+    if (e.message === 'ai_not_configured') toast('ИИ сейчас не настроен');
+    else toast('Не удалось сгенерировать описания');
+    return;
+  }
+  loadingBackdrop.remove();
+
+  if (data.changes.length === 0) { toast('Пустых описаний не найдено — заполнять нечего'); return; }
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  let hasScrolledToBottom = false;
+
+  backdrop.innerHTML = `
+    <div class="modal-sheet">
+      <h3>Проверьте изменения (${data.changes.length})</h3>
+      <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px">Можно отредактировать текст перед сохранением. Долистайте до конца, чтобы подтвердить.</p>
+      <div id="ai-fill-scroll" style="max-height:50vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:10px;margin:12px 0">
+        ${data.changes.map(c => `
+          <div class="list-item" style="margin-bottom:10px">
+            <strong>${c.name}</strong>
+            ${c.error ? `<p style="font-size:12px;color:var(--danger);margin:6px 0">Не удалось сгенерировать: ${c.error}</p>` :
+              `<textarea data-ai-fill-text="${c.id}" style="margin-top:8px;min-height:90px">${c.new_description}</textarea>`
+            }
+          </div>
+        `).join('')}
+        <div id="ai-fill-bottom-marker" style="font-size:12px;color:var(--ink-soft);text-align:center;padding:8px 0">— конец списка —</div>
+      </div>
+      <button class="btn btn-primary btn-block" id="ai-fill-confirm">⬇ Прокрутите вниз, чтобы подтвердить</button>
+      <button class="btn btn-ghost btn-block" id="ai-fill-cancel" style="margin-top:8px">Отмена</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  const scrollBox = backdrop.querySelector('#ai-fill-scroll');
+  const confirmBtn = backdrop.querySelector('#ai-fill-confirm');
+
+  function checkScroll() {
+    if (scrollBox.scrollTop + scrollBox.clientHeight >= scrollBox.scrollHeight - 8) {
+      hasScrolledToBottom = true;
+      confirmBtn.textContent = 'Подтвердить изменения';
+    }
+  }
+  scrollBox.addEventListener('scroll', checkScroll);
+  checkScroll(); // вдруг список короткий и целиком помещается без скролла
+
+  backdrop.querySelector('#ai-fill-cancel').onclick = () => backdrop.remove();
+  confirmBtn.onclick = async () => {
+    if (!hasScrolledToBottom) {
+      toast('Нет-нет, братик, сначала посмотри все изменения, не будь ленивой мордой');
+      return;
+    }
+    const changes = data.changes
+      .filter(c => !c.error)
+      .map(c => ({ id: c.id, new_description: backdrop.querySelector(`[data-ai-fill-text="${c.id}"]`).value }));
+    try {
+      const result = await api('/api/catalog/ai-fill-apply', { method: 'POST', body: { changes } });
+      backdrop.remove();
+      toast(`Обновлено товаров: ${result.applied}`);
+      await loadProducts();
+      render();
+    } catch (e) { toast('Не удалось сохранить изменения'); }
+  };
 }
 
 function openBotMessageModal(key) {
@@ -2526,6 +2602,8 @@ function attachEvents() {
   if (mcRemoveStock) mcRemoveStock.onclick = () => openStockPickerModal('remove');
   const mcList = app.querySelector('[data-action="mc-list"]');
   if (mcList) mcList.onclick = () => { state.manageCatalogView = 'list'; render(); };
+  const mcAiFill = app.querySelector('[data-action="mc-ai-fill"]');
+  if (mcAiFill) mcAiFill.onclick = () => openAiFillModal();
   const backToCatalogMenu = app.querySelector('[data-action="back-to-catalog-menu"]');
   if (backToCatalogMenu) backToCatalogMenu.onclick = () => { state.manageCatalogView = 'menu'; render(); };
   app.querySelectorAll('[data-open-manage-product]').forEach(row => {
