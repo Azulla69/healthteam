@@ -1103,16 +1103,19 @@ async function openNotificationsModal() {
   }
 }
 
-function openReviewForm(orderId) {
+function openReviewForm(orderId, existingReview) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
-  const ratings = { product_quality: 8, service_quality: 8, delivery_speed: 8 };
+  const isEdit = !!existingReview;
+  const ratings = isEdit
+    ? { product_quality: existingReview.product_quality, service_quality: existingReview.service_quality, delivery_speed: existingReview.delivery_speed }
+    : { product_quality: 10, service_quality: 10, delivery_speed: 10 };
 
   function draw() {
     backdrop.innerHTML = `
       <div class="modal-sheet">
-        <h3>⭐ Оценить заказ №${orderId}</h3>
-        <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px">За отзыв начислим 50 бонусов на ваш счёт.</p>
+        <h3>⭐ ${isEdit ? 'Редактировать отзыв' : 'Оценить заказ'} №${orderId}</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px">${isEdit ? 'Бонусы за отзыв уже начислены — изменение оценки на них не повлияет.' : 'За отзыв начислим 50 бонусов на ваш счёт.'}</p>
 
         <div class="field">
           <label>Качество товара: <strong id="val-product">${ratings.product_quality}</strong>/10</label>
@@ -1126,12 +1129,12 @@ function openReviewForm(orderId) {
           <label>Скорость доставки: <strong id="val-delivery">${ratings.delivery_speed}</strong>/10</label>
           <input type="range" min="1" max="10" id="rate-delivery" value="${ratings.delivery_speed}" style="width:100%" />
         </div>
-        <div class="field"><label>Комментарий (необязательно)</label><textarea id="review-text" placeholder="Расскажите, как всё прошло..."></textarea></div>
+        <div class="field"><label>Комментарий (необязательно)</label><textarea id="review-text" placeholder="Расскажите, как всё прошло...">${isEdit ? (existingReview.text || '') : ''}</textarea></div>
         <label class="row-between" style="padding:10px 0;cursor:pointer">
           <span>Опубликовать анонимно</span>
-          <input type="checkbox" id="review-anonymous" />
+          <input type="checkbox" id="review-anonymous" ${isEdit && existingReview.anonymous ? 'checked' : ''} />
         </label>
-        <button class="btn btn-primary btn-block" id="review-submit">Отправить отзыв</button>
+        <button class="btn btn-primary btn-block" id="review-submit">${isEdit ? 'Сохранить изменения' : 'Отправить отзыв'}</button>
         <button class="btn btn-ghost btn-block" id="review-cancel" style="margin-top:8px">Отмена</button>
       </div>
     `;
@@ -1144,14 +1147,19 @@ function openReviewForm(orderId) {
       const text = document.getElementById('review-text').value.trim();
       const anonymous = document.getElementById('review-anonymous').checked;
       try {
-        await api(`/api/orders/${orderId}/review`, { method: 'POST', body: { ...ratings, text, anonymous } });
+        if (isEdit) {
+          await api(`/api/reviews/${existingReview.id}`, { method: 'PUT', body: { ...ratings, text, anonymous } });
+          toast('Отзыв обновлён');
+        } else {
+          await api(`/api/orders/${orderId}/review`, { method: 'POST', body: { ...ratings, text, anonymous } });
+          toast('Спасибо за отзыв! Начислено 50 бонусов 🎉');
+          state.user = await api('/api/profile/me');
+        }
         backdrop.remove();
-        toast('Спасибо за отзыв! Начислено 50 бонусов 🎉');
-        state.user = await api('/api/profile/me');
         render();
       } catch (e) {
         if (e.message === 'already_reviewed') toast('Вы уже оставляли отзыв на этот заказ');
-        else toast('Не удалось отправить отзыв');
+        else toast(isEdit ? 'Не удалось сохранить изменения' : 'Не удалось отправить отзыв');
       }
     };
   }
@@ -1198,6 +1206,7 @@ async function openPurchaseHistoryModal() {
             <div class="row-between"><strong>Заказ №${o.id}</strong><span class="status-badge status-${o.status}">${STATUS_LABELS[o.status]}</span></div>
             <div style="font-size:12px;color:var(--ink-soft);margin:6px 0">${o.items.map(i => `${i.name} × ${i.qty}`).join(', ')}</div>
             <div class="row-between"><span class="price-tag">${o.payable_total ?? o.total} ₽</span>${o.paid ? `<span class="paid-badge">Оплачено</span>` : ''}</div>
+            ${o.review ? `<button class="btn btn-ghost" style="margin-top:8px;padding:6px 12px;font-size:12px" data-edit-review="${o.id}">✏️ Редактировать отзыв (${o.review.avg}/10)</button>` : ''}
           </div>
         `).join('')
       }
@@ -1205,6 +1214,12 @@ async function openPurchaseHistoryModal() {
     </div>
   `;
   backdrop.querySelector('#ph-close').onclick = () => backdrop.remove();
+  backdrop.querySelectorAll('[data-edit-review]').forEach(btn => {
+    btn.onclick = () => {
+      const order = orders.find(o => o.id === Number(btn.dataset.editReview));
+      if (order && order.review) { backdrop.remove(); openReviewForm(order.id, order.review); }
+    };
+  });
   document.body.appendChild(backdrop);
 }
 
@@ -2056,6 +2071,10 @@ function openProductModal(product) {
         <label>Штук в упаковке (для напоминания «пора докупить»)</label>
         <input id="pf-package-size" type="number" value="${product?.package_size ?? ''}" placeholder="напр. 60" />
       </div>
+      <div class="field">
+        <label>Инструкция по применению (с упаковки — ИИ будет опираться именно на неё)</label>
+        <textarea id="pf-dosage-instructions" placeholder="напр. По 1 капсуле в день, вечером, после еды">${product?.dosage_instructions || ''}</textarea>
+      </div>
       ${isEdit ? `
         <div class="field"><label>Остаток на складе</label><div style="font-size:14px">${product.stock} шт. (меняется через «Добавить/Удалить на складе»)</div></div>
         <div class="field">
@@ -2135,6 +2154,7 @@ function openProductModal(product) {
       description: backdrop.querySelector('#pf-description').value.trim(),
       price: Number(backdrop.querySelector('#pf-price').value),
       package_size: backdrop.querySelector('#pf-package-size').value ? Number(backdrop.querySelector('#pf-package-size').value) : null,
+      dosage_instructions: backdrop.querySelector('#pf-dosage-instructions').value.trim(),
     };
     if (!payload.name || !payload.price) { toast('Заполните название и цену'); return; }
     try {

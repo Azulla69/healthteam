@@ -77,7 +77,7 @@ function seedProducts() {
     image_url: '', stock: item.stock, active: true, created_at: now,
     batches: item.stock > 0 ? [{ id: i + 1, qty: item.stock, expiry: null, created_at: now }] : [],
     ozon_url: '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null,
-    package_size: null
+    package_size: null, dosage_instructions: ''
   }));
 }
 
@@ -174,6 +174,7 @@ if (fs.existsSync(DB_FILE)) {
     if (p.ozon_check_status === undefined) p.ozon_check_status = 'never';
     if (p.ozon_check_error === undefined) p.ozon_check_error = null;
     if (p.package_size === undefined) p.package_size = null;
+    if (p.dosage_instructions === undefined) p.dosage_instructions = '';
   });
   data.users.forEach(u => {
     if (u.bonus_balance === undefined) u.bonus_balance = 0;
@@ -359,7 +360,8 @@ function createProduct(fields) {
     brand: fields.brand || '', image_url: fields.image_url || '',
     stock: 0, batches: [], active: true, created_at: new Date().toISOString(),
     ozon_url: fields.ozon_url || '', ozon_price: null, ozon_checked_at: null, ozon_check_status: 'never', ozon_check_error: null,
-    package_size: fields.package_size ? Number(fields.package_size) : null
+    package_size: fields.package_size ? Number(fields.package_size) : null,
+    dosage_instructions: fields.dosage_instructions || ''
   };
   data.products.push(product);
   persist();
@@ -379,7 +381,8 @@ function updateProduct(id, fields) {
     image_url: fields.image_url ?? product.image_url,
     active: fields.active != null ? !!fields.active : product.active,
     ozon_url: fields.ozon_url ?? product.ozon_url,
-    package_size: fields.package_size !== undefined ? (fields.package_size ? Number(fields.package_size) : null) : product.package_size
+    package_size: fields.package_size !== undefined ? (fields.package_size ? Number(fields.package_size) : null) : product.package_size,
+    dosage_instructions: fields.dosage_instructions !== undefined ? fields.dosage_instructions : product.dosage_instructions
     // stock сюда намеренно не попадает — меняется только через addStock/removeStock
   });
   persist();
@@ -624,7 +627,8 @@ function createManualOrder({ user_id, items, description, discount }) {
 }
 
 function getOrdersByUser(user_id) {
-  return data.orders.filter(o => o.user_id === user_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(attachItems);
+  return data.orders.filter(o => o.user_id === user_id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .map(o => ({ ...attachItems(o), review: data.reviews.find(r => r.order_id === o.id) || null }));
 }
 
 function getAllOrders() {
@@ -1085,6 +1089,30 @@ function submitReview(order_id, user_id, { product_quality, service_quality, del
   return { review };
 }
 
+// Редактирование уже оставленного отзыва — бонус повторно не начисляется, он уже выдан при первом отзыве
+function editReview(review_id, user_id, { product_quality, service_quality, delivery_speed, text, anonymous }) {
+  const review = data.reviews.find(r => r.id === Number(review_id));
+  if (!review) return { error: 'not_found' };
+  if (review.user_id !== user_id) return { error: 'forbidden' };
+
+  const pq = Math.min(10, Math.max(1, Number(product_quality) || 0));
+  const sq = Math.min(10, Math.max(1, Number(service_quality) || 0));
+  const ds = Math.min(10, Math.max(1, Number(delivery_speed) || 0));
+  if (!pq || !sq || !ds) return { error: 'bad_rating' };
+
+  const user = getUser(user_id);
+  review.product_quality = pq;
+  review.service_quality = sq;
+  review.delivery_speed = ds;
+  review.avg = Math.round(((pq + sq + ds) / 3) * 10) / 10;
+  review.text = (text || '').trim();
+  review.anonymous = !!anonymous;
+  review.author_name = review.anonymous ? 'Аноним' : `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Покупатель';
+  review.edited_at = new Date().toISOString();
+  persist();
+  return { review };
+}
+
 function getReviews({ page = 1, pageSize = 10 } = {}) {
   const all = [...data.reviews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   const total = all.length;
@@ -1363,7 +1391,7 @@ module.exports = {
   getDeliveryCost, DELIVERY_TIERS,
   createConsultantSession, findValidConsultantSession, CONSULTANT_DISCOUNT_RATE,
   addNotification, getNotifications, getUnreadNotificationsCount, markAllNotificationsRead,
-  submitReview, getReviews, deleteReview,
+  submitReview, editReview, getReviews, deleteReview,
   getReminderData, setReminderSlot, addReminderItem, deleteReminderItem, findDueReminders, markReminderSent, REMINDER_SLOTS,
   getCourseProgress, findDueRestockReminders, markRestockNotified,
   addToWaitlist,
