@@ -6,7 +6,7 @@ const router = express.Router();
 
 // Вызывается при открытии приложения — если через 10 минут ничего не произойдёт, придёт напоминание
 router.post('/ping', requireAuth, (req, res) => {
-  db.pingAppOpen(req.user.id);
+  db.pingAppOpen(req.user.id, req.body.timezone);
   res.json({ ok: true });
 });
 

@@ -200,6 +200,7 @@ if (fs.existsSync(DB_FILE)) {
     if (u.last_cart_nudge_at === undefined) u.last_cart_nudge_at = null;
     if (u.last_webapp_nudge_at === undefined) u.last_webapp_nudge_at = null;
     if (u.last_cart_items === undefined) u.last_cart_items = [];
+    if (u.timezone === undefined) u.timezone = null;
     // Переносим старый простой баланс в новую систему бонусов с историей (разово, при миграции)
     if (u.bonus_balance > 0 && !data.bonus_tx.some(t => t.user_id === u.id)) {
       const now = new Date();
@@ -254,6 +255,7 @@ function upsertUser({ telegram_id, username, first_name, last_name, viaWebapp = 
       webapp_opened_at: viaWebapp ? new Date().toISOString() : null,
       bot_chat_nudge_due_at: null, webapp_nudge_sent: true,
       last_idle_nudge_at: null, last_cart_nudge_at: null, last_webapp_nudge_at: null, last_cart_items: [],
+      timezone: null,
       created_at: new Date().toISOString()
     };
     data.users.push(user);
@@ -1142,14 +1144,27 @@ function deleteReminderItem(id, user_id) {
 
 // Для планировщика: пользователи, у кого нужный слот включён и время совпадает с текущим,
 // и напоминание в этот слот сегодня ещё не отправлялось
-function findDueReminders(currentHHMM, todayStr) {
+// Текущее время/дата в конкретном часовом поясе (IANA-имя, напр. "Europe/Moscow", "Asia/Yekaterinburg")
+function getLocalHHMM(timezone) {
+  const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: timezone || 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false });
+  return formatter.format(new Date());
+}
+function getLocalDateStr(timezone) {
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone || 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' });
+  return formatter.format(new Date());
+}
+
+function findDueReminders() {
   const due = [];
   data.users.forEach(user => {
+    const tz = user.timezone || 'Europe/Moscow';
+    const currentHHMM = getLocalHHMM(tz);
+    const todayStr = getLocalDateStr(tz);
     REMINDER_SLOTS.forEach(slot => {
       const s = user.reminders && user.reminders[slot];
       if (s && s.enabled && s.time === currentHHMM && s.last_sent !== todayStr) {
         const items = data.reminder_items.filter(i => i.user_id === user.id && i.timing.includes(slot));
-        if (items.length > 0) due.push({ user, slot, items });
+        if (items.length > 0) due.push({ user, slot, items, todayStr });
       }
     });
   });
@@ -1223,9 +1238,10 @@ function renderTemplate(key, vars = {}) {
 const IDLE_NUDGE_MINUTES = 10;
 const CART_NUDGE_MINUTES = 30;
 
-function pingAppOpen(user_id) {
+function pingAppOpen(user_id, timezone) {
   const user = getUser(user_id);
   if (!user) return;
+  if (timezone && timezone !== user.timezone) user.timezone = timezone;
   const now = new Date();
   const cooldownOk = !user.last_idle_nudge_at || (now - new Date(user.last_idle_nudge_at)) > 24 * 3600000;
   if (cooldownOk) {

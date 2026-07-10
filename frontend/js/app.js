@@ -97,7 +97,8 @@ async function loadInitialData() {
       state.user = await api('/api/profile/me');
       state.isAdmin = !!state.user.isAdmin;
       await refreshMyActiveOrders();
-      api('/api/activity/ping', { method: 'POST' }).catch(() => {}); // не блокируем загрузку, если не удалось
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      api('/api/activity/ping', { method: 'POST', body: { timezone } }).catch(() => {}); // не блокируем загрузку, если не удалось
 
       // Если открыто по реферальной ссылке (t.me/bot?startapp=ID) и ещё не привязан пригласивший
       const startParam = tg.initDataUnsafe && tg.initDataUnsafe.start_param;
@@ -461,7 +462,7 @@ function renderReminders() {
     <div class="back-row-lg"><button data-action="back-to-services">← Сервисы</button></div>
     <div class="topbar-centered"><h1>Напоминания</h1></div>
     <div class="section" style="padding-top:0">
-      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Бот сам напишет в Telegram в указанное время, что пора принять. Слот сработает, только если в нём есть хотя бы один препарат.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px">Бот сам напишет в Telegram в указанное время (по вашему местному времени — определяется автоматически), что пора принять. Слот сработает, только если в нём есть хотя бы один препарат.</p>
 
       ${['morning', 'day', 'evening'].map(slot => {
         const [h, m] = d.settings[slot].time.split(':');

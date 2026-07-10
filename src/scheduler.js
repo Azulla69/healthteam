@@ -2,8 +2,8 @@ const db = require('./db');
 
 const SLOT_LABELS = { morning: 'утро', day: 'день', evening: 'вечер' };
 
-// Время считаем по Москве (UTC+3) — большинство пользователей в этом поясе,
-// и так понятнее задавать время в интерфейсе без выбора часового пояса
+// Используется только для внутреннего гейта "раз в сутки" при проверке цен Ozon —
+// не влияет на время напоминаний (для них теперь используется часовой пояс каждого пользователя)
 function moscowNow() {
   const now = new Date();
   const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
@@ -16,12 +16,8 @@ async function tick() {
   const bot = require('./bot'); // ленивый require, чтобы избежать циклической зависимости при старте
 
   try {
-    const mskNow = moscowNow();
-    const currentHHMM = `${pad(mskNow.getHours())}:${pad(mskNow.getMinutes())}`;
-    const todayStr = `${mskNow.getFullYear()}-${pad(mskNow.getMonth() + 1)}-${pad(mskNow.getDate())}`;
-
-    const due = db.findDueReminders(currentHHMM, todayStr);
-    for (const { user, slot, items } of due) {
+    const due = db.findDueReminders();
+    for (const { user, slot, items, todayStr } of due) {
       await bot.sendReminder(user.telegram_id, SLOT_LABELS[slot], items);
       db.markReminderSent(user.id, slot, todayStr);
     }
