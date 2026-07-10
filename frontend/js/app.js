@@ -591,7 +591,12 @@ function renderReviewsWall() {
               <span>Доставка: ${r.delivery_speed}/10</span>
             </div>
             ${r.text ? `<p style="font-size:13px;line-height:1.5">${r.text}</p>` : ''}
-            ${effectiveAdmin() ? `<button class="btn btn-danger" style="padding:6px 12px;font-size:12px;margin-top:8px" data-delete-review="${r.id}">Удалить отзыв</button>` : ''}
+            ${effectiveAdmin() ? `
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" data-edit-review-wall="${r.id}">✏️ Редактировать</button>
+                <button class="btn btn-danger" style="padding:6px 12px;font-size:12px" data-delete-review="${r.id}">Удалить отзыв</button>
+              </div>
+            ` : ''}
           </div>
         `).join('')
       }
@@ -1103,7 +1108,7 @@ async function openNotificationsModal() {
   }
 }
 
-function openReviewForm(orderId, existingReview) {
+function openReviewForm(orderId, existingReview, onSaved) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const isEdit = !!existingReview;
@@ -1156,6 +1161,7 @@ function openReviewForm(orderId, existingReview) {
           state.user = await api('/api/profile/me');
         }
         backdrop.remove();
+        if (onSaved) await onSaved();
         render();
       } catch (e) {
         if (e.message === 'already_reviewed') toast('Вы уже оставляли отзыв на этот заказ');
@@ -2472,6 +2478,12 @@ function attachEvents() {
   if (reviewsPrevBtn) reviewsPrevBtn.onclick = async () => { await loadReviews(state.reviewsData.page - 1); render(); };
   const reviewsNextBtn = app.querySelector('[data-action="reviews-next"]');
   if (reviewsNextBtn) reviewsNextBtn.onclick = async () => { await loadReviews(state.reviewsData.page + 1); render(); };
+  app.querySelectorAll('[data-edit-review-wall]').forEach(btn => {
+    btn.onclick = () => {
+      const review = state.reviewsData.items.find(r => r.id === Number(btn.dataset.editReviewWall));
+      if (review) openReviewForm(review.order_id, review, async () => { await loadReviews(state.reviewsData.page); });
+    };
+  });
   app.querySelectorAll('[data-delete-review]').forEach(btn => {
     btn.onclick = async () => {
       if (!confirm('Удалить этот отзыв? Бонус за него у пользователя будет аннулирован.')) return;

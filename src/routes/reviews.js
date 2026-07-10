@@ -11,7 +11,7 @@ router.get('/', (req, res) => {
 
 router.put('/:id', requireAuth, (req, res) => {
   const { product_quality, service_quality, delivery_speed, text, anonymous } = req.body;
-  const result = db.editReview(req.params.id, req.user.id, { product_quality, service_quality, delivery_speed, text, anonymous });
+  const result = db.editReview(req.params.id, req.user.id, { product_quality, service_quality, delivery_speed, text, anonymous }, req.isAdmin);
   if (result.error) {
     const map = { not_found: 404, forbidden: 403, bad_rating: 400 };
     return res.status(map[result.error] || 400).json(result);

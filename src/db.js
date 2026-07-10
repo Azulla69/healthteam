@@ -1090,24 +1090,24 @@ function submitReview(order_id, user_id, { product_quality, service_quality, del
 }
 
 // Редактирование уже оставленного отзыва — бонус повторно не начисляется, он уже выдан при первом отзыве
-function editReview(review_id, user_id, { product_quality, service_quality, delivery_speed, text, anonymous }) {
+function editReview(review_id, editorUserId, { product_quality, service_quality, delivery_speed, text, anonymous }, isAdmin = false) {
   const review = data.reviews.find(r => r.id === Number(review_id));
   if (!review) return { error: 'not_found' };
-  if (review.user_id !== user_id) return { error: 'forbidden' };
+  if (!isAdmin && review.user_id !== editorUserId) return { error: 'forbidden' };
 
   const pq = Math.min(10, Math.max(1, Number(product_quality) || 0));
   const sq = Math.min(10, Math.max(1, Number(service_quality) || 0));
   const ds = Math.min(10, Math.max(1, Number(delivery_speed) || 0));
   if (!pq || !sq || !ds) return { error: 'bad_rating' };
 
-  const user = getUser(user_id);
+  const owner = getUser(review.user_id); // имя всегда берём у автора отзыва, а не у того, кто сейчас редактирует
   review.product_quality = pq;
   review.service_quality = sq;
   review.delivery_speed = ds;
   review.avg = Math.round(((pq + sq + ds) / 3) * 10) / 10;
   review.text = (text || '').trim();
   review.anonymous = !!anonymous;
-  review.author_name = review.anonymous ? 'Аноним' : `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Покупатель';
+  review.author_name = review.anonymous ? 'Аноним' : `${owner?.first_name || ''} ${owner?.last_name || ''}`.trim() || 'Покупатель';
   review.edited_at = new Date().toISOString();
   persist();
   return { review };
